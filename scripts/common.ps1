@@ -65,21 +65,32 @@ function Test-PortOpen {
 }
 
 function Get-PortOwner {
+    # Do NOT filter on -State Listen. On Windows 11 (build 26200 observed) the
+    # listener row can come back with an EMPTY State string while still carrying
+    # the right OwningProcess, so -State Listen returns nothing and we would
+    # report a null owner. Query the port, then pick the row that actually names
+    # a process.
     param([int]$Port)
-    $conn = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (-not $conn) {
-        # netstat still reports listeners Get-NetTCPConnection misses on some adapters.
-        $line = netstat -ano | Select-String ":$Port\s" | Select-String 'LISTENING' | Select-Object -First 1
-        if (-not $line) { return $null }
-        $owningPid = [int](($line.ToString().Trim() -split '\s+')[-1])
-        $p = Get-Process -Id $owningPid -ErrorAction SilentlyContinue
-        return [pscustomobject]@{ Pid = $owningPid; Name = if ($p) { $p.ProcessName } else { 'unknown' } }
+    $conn = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue |
+        Where-Object { $_.OwningProcess -and $_.OwningProcess -gt 0 } |
+        Select-Object -First 1
+    if ($conn) {
+        $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
+        return [pscustomobject]@{
+            Pid  = [int]$conn.OwningProcess
+            Name = if ($proc) { $proc.ProcessName } else { 'unknown' }
+        }
     }
-    $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
-    return [pscustomobject]@{
-        Pid  = $conn.OwningProcess
-        Name = if ($proc) { $proc.ProcessName } else { 'unknown' }
-    }
+
+    # netstat fallback for adapters Get-NetTCPConnection misses.
+    $line = netstat -ano | Select-String ":$Port\s" | Select-String 'LISTENING' | Select-Object -First 1
+    if (-not $line) { return $null }
+    $token = ($line.ToString().Trim() -split '\s+')[-1]
+    if ($token -notmatch '^\d+$') { return $null }
+    $owningPid = [int]$token
+    if ($owningPid -le 0) { return $null }
+    $p = Get-Process -Id $owningPid -ErrorAction SilentlyContinue
+    return [pscustomobject]@{ Pid = $owningPid; Name = if ($p) { $p.ProcessName } else { 'unknown' } }
 }
 
 function Test-Health {
@@ -150,6 +161,65 @@ function Stop-ProcessTree {
     param([int]$ProcessId)
     if (-not $ProcessId) { return }
     & taskkill /PID $ProcessId /T /F 2>&1 | Out-Null
+}
+
+# --- Boot lock ---------------------------------------------------------------
+# Two concurrent boots race between "is the port free" and "bind the port",
+# leaving a duplicate gateway or half-written state. On POSIX we use a directory;
+# on Windows the equivalent atomic primitive is CreateNew, which fails if the
+# file already exists.
+
+function Get-BootLockPath {
+    param([string]$ProjectDir)
+    $safe = ($ProjectDir -replace '[^A-Za-z0-9]', '_')
+    if ($safe.Length -gt 100) { $safe = $safe.Substring($safe.Length - 100) }
+    return Join-Path $env:TEMP "localhost2cloud-$safe.lock"
+}
+
+function Enter-BootLock {
+    param([string]$ProjectDir)
+    $path = Get-BootLockPath -ProjectDir $ProjectDir
+    for ($attempt = 0; $attempt -lt 2; $attempt++) {
+        try {
+            $fs = [System.IO.File]::Open($path, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+            $bytes = [Text.Encoding]::UTF8.GetBytes([string]$PID)
+            $fs.Write($bytes, 0, $bytes.Length)
+            $fs.Close()
+            $script:BootLockPath = $path
+            return $true
+        } catch [System.IO.IOException] {
+            # Lock exists. Reclaim it only if its owner is provably gone.
+            # Parse defensively: a trailing newline or stray whitespace must not
+            # turn a LIVE owner into 0, which would look like a dead lock and let
+            # two boots run at once.
+            $ownerPid = 0
+            $rawOwner = $null
+            try { $rawOwner = (Get-Content $path -Raw -ErrorAction Stop) } catch { }
+            if ($null -ne $rawOwner) {
+                $trimmed = ([string]$rawOwner).Trim()
+                if ($trimmed -match '^\d+$') { $ownerPid = [int]$trimmed }
+            }
+            if ($ownerPid -gt 0) {
+                if (Get-Process -Id $ownerPid -ErrorAction SilentlyContinue) {
+                    return $false   # live owner: refuse
+                }
+                Write-Warn2 "Clearing a stale boot lock (pid $ownerPid is gone)"
+            } else {
+                Write-Warn2 "Clearing an unreadable boot lock"
+            }
+            Remove-Item $path -Force -ErrorAction SilentlyContinue
+        } catch {
+            return $false
+        }
+    }
+    return $false
+}
+
+function Exit-BootLock {
+    if ($script:BootLockPath -and (Test-Path $script:BootLockPath)) {
+        Remove-Item $script:BootLockPath -Force -ErrorAction SilentlyContinue
+    }
+    $script:BootLockPath = $null
 }
 
 function Wait-Gateway {

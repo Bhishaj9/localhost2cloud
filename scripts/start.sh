@@ -79,9 +79,18 @@ fi
 
 # --- 0. Existing session ---------------------------------------------------
 if has_state && [ "$FORCE" != 'true' ]; then
-  old_pid="$(state_get 'Pids.tunnel' 2>/dev/null || true)"
-  old_start="$(state_get 'Starts.tunnel' 2>/dev/null || true)"
-  if pid_alive "$old_pid" && proc_matches "$old_pid" "$old_start"; then
+  # Check the gateway too, not just the tunnel: with --provider none there is no
+  # tunnel at all, so a running local-only demo looked "not running" and a
+  # second boot would charge in and collide on the gateway port.
+  running='false'
+  for key in tunnel gateway; do
+    old_pid="$(state_get "Pids.$key" 2>/dev/null || true)"
+    old_start="$(state_get "Starts.$key" 2>/dev/null || true)"
+    if pid_alive "$old_pid" && proc_matches "$old_pid" "$old_start"; then
+      running='true'; break
+    fi
+  done
+  if [ "$running" = 'true' ]; then
     bad "A demo is already running for this project."
     printf '    URL: %s%s%s\n' "$C_GREEN" "$(state_get 'Url')" "$C_RESET"
     warn "Re-run with -f/--force to restart, or run ./stop.sh first."

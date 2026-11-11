@@ -46,17 +46,78 @@ $config = Get-DemoConfig -ConfigPath $ConfigPath
 $data   = $config.Data
 Write-Step "Project: $($config.Dir)"
 
-# --- 0. Existing session ---------------------------------------------------
+# --- 0. Boot lock ----------------------------------------------------------
+# Two boots racing between "port free" and "bind port" produce duplicate
+# gateways or half-written state. Take an exclusive lock for the duration.
+if (-not (Enter-BootLock -ProjectDir $config.Dir)) {
+    throw "Another boot is already running for this project. Wait for it, or run Stop-Demo.ps1 first."
+}
+
+# Track what we start so an interrupt can unwind it. Without this, Ctrl+C
+# mid-boot leaves orphans that Stop-Demo.ps1 cannot find (no session file).
+$script:StartedByBoot = @()
+$script:Interrupted   = $false
+$script:BootLockPath  = $script:BootLockPath
+
+trap {
+    # PowerShell's trap fires for EVERY terminating error, not just Ctrl+C. If we
+    # treated them all as interrupts we would replace a real diagnostic ("port in
+    # use", "service did not become ready") with a misleading "Interrupted", so
+    # distinguish the two cases.
+    $ex = $_.Exception
+    $isInterrupt = $false
+    if ($ex -is [System.Management.Automation.PipelineStoppedException]) { $isInterrupt = $true }
+    elseif ($ex.GetType().Name -eq 'PipelineStoppedException') { $isInterrupt = $true }
+    elseif ($ex.InnerException -and $ex.InnerException.GetType().Name -eq 'PipelineStoppedException') { $isInterrupt = $true }
+
+    # Either way, a half-finished boot must not leak processes or the lock.
+    if ($script:StartedByBoot.Count -gt 0) {
+        Write-Host ""
+        if ($isInterrupt) { Write-Warn2 "Interrupted - stopping what this boot had already started" }
+        else { Write-Warn2 "Boot failed - stopping what this boot had already started" }
+        foreach ($entry in $script:StartedByBoot) {
+            # NB: never name this $pid - that is a reserved automatic variable.
+            $childPid = $entry.Pid
+            if ($childPid -and (Get-Process -Id $childPid -ErrorAction SilentlyContinue)) {
+                Stop-ProcessTree -ProcessId $childPid
+                Write-Host "    $($entry.Name) stopped (pid $childPid)" -ForegroundColor Yellow
+            }
+        }
+        # Partial state would make Stop-Demo.ps1 chase processes that are gone.
+        Clear-DemoState -Config $config
+    }
+    Exit-BootLock
+
+    if ($isInterrupt) { exit 130 }
+    # A real error: surface it readably, then stop. A bare `throw` inside a trap
+    # loses the message and the user just sees "ScriptHalted".
+    Write-Bad $ex.Message
+    exit 1
+}
+
+# --- 0b. Existing session --------------------------------------------------
 $existing = Get-DemoState -Config $config
 if ($existing -and -not $Force) {
-    $tunnelAlive = $false
-    if ($existing.Pids -and $existing.Pids.Tunnel) {
-        $tunnelAlive = [bool](Get-Process -Id $existing.Pids.Tunnel -ErrorAction SilentlyContinue)
+    # Check the gateway, not just the tunnel: with -Provider none there is no
+    # tunnel at all, so a running local-only demo looked "not running" and a
+    # second boot would charge in and collide on the gateway port.
+    $alive = $false
+    foreach ($key in @('Gateway','Tunnel')) {
+        if (-not $existing.Pids) { continue }
+        if (-not $existing.Pids.PSObject.Properties[$key]) { continue }
+        $candidatePid = $existing.Pids.$key
+        if (-not $candidatePid) { continue }
+        $recStart = ''
+        if ($existing.Starts -and $existing.Starts.PSObject.Properties[$key]) {
+            $recStart = [string]$existing.Starts.$key
+        }
+        if (Test-ProcessMatches -ProcessId ([int]$candidatePid) -RecordedStart $recStart) { $alive = $true; break }
     }
-    if ($tunnelAlive) {
+    if ($alive) {
         Write-Bad "A demo is already running for this project."
         Write-Host "    URL: $($existing.Url)" -ForegroundColor Green
         Write-Host "    Re-run with -Force to restart, or run Stop-Demo.ps1 first." -ForegroundColor Yellow
+        Exit-BootLock
         return
     }
     Write-Warn2 "Found a stale session record; cleaning it up"
@@ -141,6 +202,7 @@ foreach ($svc in $data.services) {
     $proc = Start-LoggedProcess -FilePath $exe -ArgumentList $launchArgs -Name $svc.name -WorkingDirectory $workDir -LogDir (Get-StateDir -Config $config)
     $pids[$svc.name] = $proc.Pid
     $starts[$svc.name] = Get-ProcessStart -ProcessId $proc.Pid
+    $script:StartedByBoot += [pscustomobject]@{ Name = $svc.name; Pid = $proc.Pid }
     Write-Ok "Started (pid $($proc.Pid))"
 
     if (-not (Wait-Health -Url $svc.healthUrl -TimeoutSeconds 150 -Label "'$($svc.name)'")) {
@@ -175,6 +237,7 @@ if ($authCfg -and $authCfg.enabled -eq $true) {
 $gwProc = Start-LoggedProcess -FilePath $caddy -ArgumentList @('run','--config',$caddyfilePath,'--adapter','caddyfile') -Name 'gateway' -WorkingDirectory $config.Dir -LogDir (Get-StateDir -Config $config)
 $pids['gateway'] = $gwProc.Pid
 $starts['gateway'] = Get-ProcessStart -ProcessId $gwProc.Pid
+$script:StartedByBoot += [pscustomobject]@{ Name = 'gateway'; Pid = $gwProc.Pid }
 Write-Ok "Started (pid $($gwProc.Pid))"
 
 $gwHealth = "http://127.0.0.1:$($gw.port)/"
@@ -208,6 +271,12 @@ if ($Provider -eq 'none') {
     $tunnelPid = $tunProc.Pid
     $pids['tunnel'] = $tunnelPid
     $starts['tunnel'] = Get-ProcessStart -ProcessId $tunnelPid
+    $script:StartedByBoot += [pscustomobject]@{ Name = 'tunnel'; Pid = $tunnelPid }
+
+    # If a named tunnel supplies a stable hostname, prefer it over whatever the
+    # log prints: that is the entire point of configuring one.
+    $configuredHost = $data.tunnel.hostname
+    if ($configuredHost) { $publicUrl = "https://$configuredHost" }
 
     $deadline = (Get-Date).AddSeconds(100)
     while ((Get-Date) -lt $deadline) {
@@ -263,6 +332,9 @@ $state = [pscustomobject]@{
     Checks    = $checks
 }
 Save-DemoState -Config $config -State $state
+# State is on disk and the stack is healthy: the boot is complete, so another
+# boot may now legitimately start (it will see the session and refuse).
+Exit-BootLock
 
 $allOk = -not ($checks | Where-Object { -not $_.Ok })
 $warnings = @()
