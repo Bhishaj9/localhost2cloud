@@ -276,6 +276,23 @@ function New-Caddyfile {
     $lines += "`tencode zstd gzip"
     $lines += ''
 
+    # Auth wraps every route, before any handle block, so a request cannot reach
+    # an upstream without passing it.
+    $auth = $Config.Data.auth
+    if ($auth -and $auth.enabled -eq $true) {
+        $user = if ($auth.username) { $auth.username } else { 'demo' }
+        $hash = if ($auth.passwordHash) { [string]$auth.passwordHash } else { '' }
+        if (-not $hash -and $auth.password) {
+            $hash = (& $script:CaddyBin hash-password --plaintext ([string]$auth.password) 2>$null)
+            if (-not $hash) { throw "Could not hash the demo password with caddy." }
+        }
+        if (-not $hash) { throw "auth is enabled but neither auth.passwordHash nor auth.password is set." }
+        $lines += "`tbasic_auth {"
+        $lines += "`t`t$user $hash"
+        $lines += "`t}"
+        $lines += ''
+    }
+
     $defaultService = $null
     $exposed = 0
 

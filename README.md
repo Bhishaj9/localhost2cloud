@@ -153,6 +153,38 @@ for when that is the better choice.
 | `note` | Printed after a successful boot |
 | `devMode` | `{ "startArgs": [...] }` used with `--dev` / `-DevMode` |
 
+### Optional `auth` block
+
+Require a login before anything reaches your app. Implemented with Caddy's
+`basic_auth` — no extra dependency, and the password is never written to disk.
+
+```json
+"auth": { "enabled": true, "username": "demo", "passwordHash": "$2a$14$..." }
+```
+
+Generate the hash (and get a strong password) with:
+
+```bash
+./scripts/gen-password.sh                       # print a password + hash
+./scripts/gen-password.sh -c ../demo.config.json  # write auth{} into your config
+```
+
+`auth.password` (plaintext) also works — it is hashed at boot and never persisted. Verified
+behaviour: anonymous requests get `401`, correct credentials get the app, wrong credentials
+get `401`.
+
+### Optional `tunnel` block — stable hostname
+
+By default you get a new random URL every boot. For a recurring demo, create a named tunnel
+in the Cloudflare dashboard and pin it:
+
+```json
+"tunnel": { "token": "<tunnel token>", "hostname": "demo.example.com" }
+```
+
+The link is then the same every time, so you can send it once and reuse it. Without this
+block, the anonymous quick-tunnel path is used unchanged.
+
 `.demo-state/` holds the session, logs and generated Caddyfile. It is gitignored.
 
 ---
@@ -211,15 +243,34 @@ tunnel domain first.
 
 ## Security
 
-A free quick tunnel is **public with no authentication** — anyone with the URL gets in. Treat
-the link as a password, keep demo windows short, and always run `./stop.sh` /
-`Stop-Demo.ps1` afterwards.
+A free quick tunnel is **public with no authentication at the edge** — anyone with the URL
+reaches your gateway. Treat the link as a password, keep demo windows short, and always run
+`./stop.sh` / `Stop-Demo.ps1` afterwards.
+
+Add a login instead of relying on obscurity:
+
+```bash
+./scripts/gen-password.sh -c /path/to/YourProject/demo.config.json
+```
+
+That writes an `auth` block into your config. From the next boot the gateway answers `401`
+until the right credentials arrive, so the link alone is not enough — share the password
+separately from the link. The password is stored only as a bcrypt hash.
 
 Do not demo screens showing customer data, credentials, or secrets. Anything the app injects
 server-side stays server-side; anything in a client bundle is public.
 
-For more than a casual demo, put an auth wall in front — Cloudflare Access or `oauth2-proxy`
-behind Caddy. See [`references/providers.md`](references/providers.md).
+For identity-aware access (per-person logins, audit trail) rather than a single shared
+password, put Cloudflare Access or `oauth2-proxy` in front. See
+[`references/providers.md`](references/providers.md).
+
+### What this does not cover
+
+Basic auth is one shared credential, not per-user accounts: everyone in the demo shares a
+login, and there is no way to revoke one person without changing it for all. It also does not
+encrypt the app's own data at rest, and it does not stop someone with the password from
+sharing it. For a short team demo that is the right trade; for anything longer lived, use an
+identity-aware proxy.
 
 ---
 
@@ -235,6 +286,13 @@ Fully supported on **macOS, Linux and Windows**:
 
 The bash port needs `bash` 4+, `curl`, and either `python3` or `jq` for JSON. Port ownership
 uses `lsof`, falling back to `ss` then `netstat`, so it works on minimal containers too.
+
+### Known limits
+
+Raw **TCP/UDP tunneling** and **per-user accounts** are out of scope by design — the first is
+a limitation of free HTTP-only tunnels, the second needs an identity provider. Both, plus what
+to use instead, are documented in [`docs/limits.md`](docs/limits.md). Written down so you do
+not have to discover them by trying.
 
 ---
 

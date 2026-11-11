@@ -140,6 +140,14 @@ for i, s in enumerate(svcs):
     out.append(p + 'DEVSTART=' + q('\n'.join(str(a) for a in dev)))
 notes = cfg.get('notes') or []
 out.append('NOTES=' + q('\n'.join(str(n) for n in notes)))
+auth = cfg.get('auth') or {}
+out.append('AUTH_ENABLED=' + q('true' if auth.get('enabled') is True else 'false'))
+out.append('AUTH_USER=' + q(str(auth.get('username') or 'demo')))
+out.append('AUTH_HASH=' + q(str(auth.get('passwordHash') or '')))
+out.append('AUTH_PASSWORD=' + q(str(auth.get('password') or '')))
+tun = cfg.get('tunnel') or {}
+out.append('TUN_TOKEN=' + q(str(tun.get('token') or '')))
+out.append('TUN_HOSTNAME=' + q(str(tun.get('hostname') or '')))
 print('\n'.join(out))
 PY
 )" || exit 1
@@ -168,7 +176,13 @@ PY
           ("SVC_" + ($i|tostring) + "_DEFAULT="  + ((if $s.default == true  then "true"  else "false" end) | @sh)),
           ("SVC_" + ($i|tostring) + "_DEVSTART=" + (((($s.devMode.startArgs // []) | map(tostring) | join("\n"))) | @sh))
       ),
-      ("NOTES=" + (((.notes // []) | map(tostring) | join("\n")) | @sh))
+      ("NOTES=" + (((.notes // []) | map(tostring) | join("\n")) | @sh)),
+      ("AUTH_ENABLED=" + ((if (.auth.enabled // false) == true then "true" else "false" end) | @sh)),
+      ("AUTH_USER=" + (((.auth.username // "demo") | tostring) | @sh)),
+      ("AUTH_HASH=" + (((.auth.passwordHash // "") | tostring) | @sh)),
+      ("AUTH_PASSWORD=" + (((.auth.password // "") | tostring) | @sh)),
+      ("TUN_TOKEN=" + (((.tunnel.token // "") | tostring) | @sh)),
+      ("TUN_HOSTNAME=" + (((.tunnel.hostname // "") | tostring) | @sh))
     ' "$CFG_PATH")" || exit 1
   fi
 }
@@ -217,20 +231,30 @@ port_owner() {
   printf '%s|%s' "$pid" "${name:-unknown}"
 }
 
-# http_code URL [timeout] -> 3-digit code (000 on failure)
+# http_code URL [timeout] [user:pass] -> 3-digit code (000 on failure)
 http_code() {
-  local url="$1" timeout="${2:-8}"
+  local url="$1" timeout="${2:-8}" creds="${3:-}"
   command -v curl >/dev/null 2>&1 || { echo 000; return 0; }
-  curl -s -o /dev/null -w '%{http_code}' --max-time "$timeout" "$url" 2>/dev/null || echo 000
+  local out
+  if [ -n "$creds" ]; then
+    out="$(curl -s -o /dev/null -w '%{http_code}' --max-time "$timeout" -u "$creds" "$url" 2>/dev/null)"
+  else
+    out="$(curl -s -o /dev/null -w '%{http_code}' --max-time "$timeout" "$url" 2>/dev/null)"
+  fi
+  # curl already prints 000 on failure; never let a bare || append a second one.
+  case "$out" in
+    [1-5][0-9][0-9]) printf '%s' "$out" ;;
+    *) printf '000' ;;
+  esac
 }
 
-# health_ok URL [timeout] [accepted-codes]
+# health_ok URL [timeout] [accepted-codes] [user:pass]
 # Accepted codes matter because auth-gated endpoints answer 401, which proves
 # the request reached the service rather than failing at the proxy.
 health_ok() {
-  local url="$1" timeout="${2:-8}" accept="${3:-}"
+  local url="$1" timeout="${2:-8}" accept="${3:-}" creds="${4:-}"
   [ -z "$url" ] && return 0
-  local code; code="$(http_code "$url" "$timeout")"
+  local code; code="$(http_code "$url" "$timeout" "$creds")"
   case "$code" in 2??|3??) return 0 ;; esac
   local a
   for a in $accept; do [ "$code" = "$a" ] && return 0; done
@@ -503,6 +527,32 @@ resolve_tool() {
 # Exactly one origin must front every port the browser touches: a single tunnel
 # can only target one local address. Generated per boot so routes cannot drift.
 
+# auth_block <indent> -> prints a basic_auth directive, or nothing when auth is
+# off. Accepts either a pre-hashed password (auth.passwordHash) or a plaintext
+# one (auth.password), hashing the latter with Caddy so no extra tooling is
+# needed. A hash in config is preferred: it keeps the secret out of dotfiles
+# and shell history.
+auth_block() {
+  local indent="${1:-$'\t'}"
+  local enabled hash plain user
+  enabled="$(printf '%s' "${AUTH_ENABLED:-false}")"
+  [ "$enabled" = 'true' ] || return 0
+
+  user="${AUTH_USER:-demo}"
+  hash="${AUTH_HASH:-}"
+  plain="${AUTH_PASSWORD:-}"
+
+  if [ -z "$hash" ] && [ -n "$plain" ]; then
+    hash="$("$CADDY_BIN" hash-password --plaintext "$plain" 2>/dev/null)" || \
+      die "Could not hash the demo password with caddy."
+  fi
+  [ -n "$hash" ] || die "auth is enabled but neither auth.passwordHash nor auth.password is set."
+
+  printf '%sbasic_auth {\n' "$indent"
+  printf '%s\t%s %s\n' "$indent" "$user" "$hash"
+  printf '%s}\n' "$indent"
+}
+
 generate_caddyfile() {
   local out="$1"
   local default_name='' default_port='' exposed=0 i prefix
@@ -520,6 +570,14 @@ generate_caddyfile() {
     printf '\tencode zstd gzip\n'
     echo ''
   } >> "$out"
+
+  # Auth wraps every route, before any handle block runs, so a request cannot
+  # reach an upstream without passing it.
+  local ab
+  ab="$(auth_block $'\t')"
+  if [ -n "$ab" ]; then
+    printf '%s\n\n' "$ab" >> "$out"
+  fi
 
   i=0
   while [ "$i" -lt "$SVC_COUNT" ]; do

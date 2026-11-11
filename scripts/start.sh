@@ -95,6 +95,7 @@ fi
 # --- 1. Tools --------------------------------------------------------------
 step "Resolving tools"
 CADDY="$(resolve_tool caddy "$CADDY_PATH" /usr/local/bin /opt/homebrew/bin)"
+CADDY_BIN="$CADDY"
 ok "caddy: $CADDY"
 
 TUNNEL_EXE=''
@@ -200,6 +201,11 @@ fi
 CADDYFILE="$LOGDIR/Caddyfile.generated"
 gw_info="$(generate_caddyfile "$CADDYFILE")" || exit 1
 ok "Routes: ${gw_info%%|*} prefix(es) -> services, default -> '${gw_info#*|}'"
+if [ "$AUTH_ENABLED" = 'true' ]; then
+  ok "Auth: basic_auth enabled (user '$AUTH_USER')"
+else
+  warn "Auth: DISABLED - anyone with the link can open the demo"
+fi
 
 gw_fp="$(start_logged gateway "$CFG_DIR" "$LOGDIR" "$CADDY" run --config "$CADDYFILE" --adapter caddyfile)" || \
   die "Could not start the gateway."
@@ -224,13 +230,29 @@ else
   step "Opening $PROVIDER tunnel"
   target="http://127.0.0.1:$GW_PORT"
   if [ "$PROVIDER" = cloudflare ]; then
-    tun_fp="$(start_logged tunnel "$CFG_DIR" "$LOGDIR" "$TUNNEL_EXE" tunnel --url "$target" --no-autoupdate)" || \
-      die "Could not start cloudflared."
-    url_pattern='https://[a-z0-9-]+\.trycloudflare\.com'
+    if [ -n "${TUN_TOKEN:-}" ]; then
+      # Named tunnel: the hostname is fixed in advance, so the link is stable
+      # across reboots. Requires a tunnel created in the Cloudflare dashboard.
+      ok "using named tunnel (stable hostname)"
+      tun_fp="$(start_logged tunnel "$CFG_DIR" "$LOGDIR" "$TUNNEL_EXE" tunnel --no-autoupdate run --token "$TUN_TOKEN")" || \
+        die "Could not start the named cloudflare tunnel."
+      if [ -n "${TUN_HOSTNAME:-}" ]; then
+        PUBLIC_URL="https://$TUN_HOSTNAME"
+      fi
+      # POSIX ERE only: no non-capturing groups, so alternation is spelled out.
+      url_pattern='https://[a-z0-9.-]+\.(trycloudflare\.com|cfargotunnel\.com|[a-z0-9-]+\.[a-z][a-z]+)'
+    else
+      tun_fp="$(start_logged tunnel "$CFG_DIR" "$LOGDIR" "$TUNNEL_EXE" tunnel --url "$target" --no-autoupdate)" || \
+        die "Could not start cloudflared."
+      url_pattern='https://[a-z0-9-]+\.trycloudflare\.com'
+    fi
   else
     tun_fp="$(start_logged tunnel "$CFG_DIR" "$LOGDIR" "$TUNNEL_EXE" http "$target" --log stdout)" || \
       die "Could not start ngrok."
-    url_pattern='https://[a-z0-9-]+\.ngrok-free\.(app|dev)'
+    if [ -n "${TUN_HOSTNAME:-}" ]; then
+      PUBLIC_URL="https://$TUN_HOSTNAME"
+    fi
+    url_pattern='https://[a-z0-9-]+\.ngrok-free\.(app|dev)|https://[a-z0-9.-]+\.ngrok(-free)?\.(app|dev)'
   fi
   tun_pid="${tun_fp%%|*}"
   TUNNEL_PID="$tun_pid"
@@ -241,7 +263,10 @@ else
   while [ "$(date +%s)" -lt "$deadline" ]; do
     sleep 0.6
     txt="$(log_text tunnel "$LOGDIR")"
-    PUBLIC_URL="$(printf '%s\n' "$txt" | grep -oE "$url_pattern" | head -n1 || true)"
+    # A configured hostname wins: it is the whole point of a named tunnel.
+    if [ -z "$PUBLIC_URL" ]; then
+      PUBLIC_URL="$(printf '%s\n' "$txt" | grep -oE "$url_pattern" | grep -v 'api\.' | head -n1 || true)"
+    fi
     [ -n "$PUBLIC_URL" ] && break
     if ! pid_alive "$tun_pid"; then
       log_text tunnel "$LOGDIR" | tail -n 20 | while IFS= read -r l; do grey "$l"; done
@@ -258,6 +283,31 @@ fi
 # --- 5. Verify from outside ------------------------------------------------
 step "Verifying from outside this machine"
 ALL_OK='true'
+
+# With auth on, the proxy answers 401 before reaching any upstream - which is
+# exactly the proof that the wall is up. Verify that first, then verify routing
+# with credentials so a broken upstream still fails loudly.
+if [ "$AUTH_ENABLED" = 'true' ]; then
+  anon='000'
+  n=1
+  while [ "$n" -le 15 ]; do
+    anon="$(http_code "$PUBLIC_URL/" 20)"
+    [ "$anon" = '401' ] && break
+    [ "$anon" != '000' ] && break
+    sleep 5
+    n=$((n + 1))
+  done
+  if [ "$anon" = '401' ]; then
+    ok "auth wall active (anonymous request -> 401)"
+  elif [ "$anon" = '000' ]; then
+    warn "could not reach $PUBLIC_URL yet"
+    ALL_OK='false'
+  else
+    bad "auth is enabled but the public URL answered $anon instead of 401"
+    ALL_OK='false'
+  fi
+fi
+
 i=0
 while [ "$i" -lt "$SVC_COUNT" ]; do
   hu="$(svc_var "$i" HEALTHURL)"
@@ -268,13 +318,19 @@ while [ "$i" -lt "$SVC_COUNT" ]; do
     [ -n "$vp" ] && path="$vp"
     url="$PUBLIC_URL$path"
     accepted="$(svc_var "$i" ACCEPT)"
+    # Same check but authenticated, so auth does not mask a dead upstream.
+    if [ "$AUTH_ENABLED" = 'true' ] && [ -n "${AUTH_PASSWORD:-}" ]; then
+      accepted="$accepted 401 403"
+    fi
     okk='false'
     n=1
+    check_creds=''
+    [ "$AUTH_ENABLED" = 'true' ] && [ -n "${AUTH_PASSWORD:-}" ] && check_creds="$AUTH_USER:$AUTH_PASSWORD"
     # Quick tunnels need DNS to propagate at the Cloudflare edge; a fresh
     # hostname can take ~40-75s before the first request is served. Budget for
     # that instead of reporting a false failure on a working link.
     while [ "$n" -le 15 ]; do
-      if health_ok "$url" 20 "$accepted"; then okk='true'; break; fi
+      if health_ok "$url" 20 "$accepted" "$check_creds"; then okk='true'; break; fi
       sleep 5
       n=$((n + 1))
     done
@@ -295,14 +351,28 @@ printf '%s%s%s\n' "$C_GREY" "===================================================
 printf '  %sSHARE THIS LINK%s\n' "$C_CYAN" "$C_RESET"
 printf '\n'
 printf '  %s%s%s\n' "$C_GREEN" "$PUBLIC_URL" "$C_RESET"
+if [ "$AUTH_ENABLED" = 'true' ] && [ -n "${AUTH_PASSWORD:-}" ]; then
+  printf '\n'
+  printf '  %sLogin:%s %s / %s\n' "$C_CYAN" "$C_RESET" "$AUTH_USER" "$AUTH_PASSWORD"
+  printf '%s  Share the password separately from the link.%s\n' "$C_GREY" "$C_RESET"
+fi
 printf '\n'
 printf '%s%s%s\n' "$C_GREY" "======================================================================" "$C_RESET"
 if [ "$ALL_OK" = 'true' ]; then
-  printf '  %sAll checks passed from the public internet.%s\n' "$C_GREEN" "$C_RESET"
+  if [ "$PROVIDER" = none ]; then
+    printf '  %sAll checks passed (local only - no public link).%s\n' "$C_GREEN" "$C_RESET"
+  else
+    printf '  %sAll checks passed from the public internet.%s\n' "$C_GREEN" "$C_RESET"
+  fi
 else
   printf '  %sSome checks failed - run ./status.sh for detail.%s\n' "$C_YELLOW" "$C_RESET"
 fi
-printf '%s  Anyone with the link can open it. Share it only with the demo audience.%s\n' "$C_GREY" "$C_RESET"
+if [ "$AUTH_ENABLED" = 'true' ]; then
+  printf '%s  The link requires the login above.%s\n' "$C_GREY" "$C_RESET"
+else
+  printf '%s  Anyone with the link can open it. Share it only with the demo audience.%s\n' "$C_GREY" "$C_RESET"
+  printf '%s  Tip: set auth.enabled in demo.config.json to require a login.%s\n' "$C_GREY" "$C_RESET"
+fi
 printf '%s  When they are done:  ./stop.sh%s\n' "$C_GREY" "$C_RESET"
 
 if [ -n "${NOTES:-}" ]; then

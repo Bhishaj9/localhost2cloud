@@ -94,6 +94,34 @@ Run these from the project root (they auto-discover `demo.config.json` upward).
 Never leave the tunnel running after the demo ends — an anonymous public URL pointed at the
 user's laptop is exactly the thing to forget about.
 
+## Access control
+
+By default the link is bare. Before exposing anything you would not want forwarded, offer
+auth:
+
+- `auth.enabled: true` in `demo.config.json` puts HTTP basic auth in front of every route
+  (Caddy `basic_auth`, bcrypt). Anonymous requests get `401` before reaching any upstream.
+- Generate credentials with `scripts/gen-password.sh` (or `-c <config>` to patch the file).
+  It prints the password once and stores only the hash.
+- Tell the user to **share the password separately from the link** — a link and password in
+  the same message is the same secret twice.
+
+`auth` is one shared credential for the whole audience: no per-user accounts, no revocation
+without rotating it for everyone. That is the right trade for a same-day team demo. For named
+users or an audit trail, put Cloudflare Access / `oauth2-proxy` in front instead.
+
+## Stable links
+
+The default provider mints a new random hostname on every boot. For a recurring demo, set
+`tunnel.token` + `tunnel.hostname` (named Cloudflare tunnel, created in their dashboard) and
+the link stays the same across reboots — send it once, reuse it.
+
+## What this skill does not do
+
+Raw **TCP/UDP** tunneling and **per-user accounts**. The first is a limit of free HTTP-only
+tunnels; the second needs an identity provider. Say so plainly rather than attempting either —
+`docs/limits.md` explains what to recommend instead.
+
 ## Workflow: "stop it" / "they're done"
 
 `stop.sh` / `Stop-Demo.ps1`, then report what was stopped. If the user wants the whole stack

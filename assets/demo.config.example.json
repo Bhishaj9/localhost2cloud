@@ -20,6 +20,14 @@
     "    devMode     optional { startArgs } used with --dev (or -DevMode on Windows)",
     "  gateway      the single local origin every browser request goes through",
     "    port        local port for the gateway (one tunnel targets this)",
+    "  auth         optional; require a login before anyone reaches the app",
+    "    enabled     true to turn on HTTP basic auth at the gateway",
+    "    username    login name (default: demo)",
+    "    passwordHash  bcrypt hash - preferred. Generate with scripts/gen-password.sh",
+    "    password    plaintext alternative; hashed at boot and never written to disk",
+    "  tunnel       optional; only relevant to the cloudflare/ngrok providers",
+    "    token       named-tunnel token for a STABLE hostname across reboots",
+    "    hostname    the hostname that token is routed to (e.g. demo.example.com)",
     "  notes[]      optional strings printed after a successful boot"
   ],
   "services": [
@@ -38,7 +46,12 @@
   "gateway": {
     "port": 8081
   },
+  "auth": {
+    "enabled": false,
+    "username": "demo",
+    "passwordHash": ""
+  },
   "notes": [
-    "Cloudflare quick tunnels have no access control. Share the link only with the demo audience and stop the demo when done."
+    "Without auth, anyone holding the link can open the demo. Run scripts/gen-password.sh to add a login."
   ]
 }

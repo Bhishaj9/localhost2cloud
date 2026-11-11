@@ -66,6 +66,7 @@ if ($existing -and -not $Force) {
 # --- 1. Tools --------------------------------------------------------------
 Write-Step "Resolving tools"
 $caddy = Resolve-Tool -Name 'caddy' -ExplicitPath $CaddyPath -FallbackDirs @('D:\Tools\caddy','C:\Tools\caddy')
+$script:CaddyBin = $caddy
 Write-Ok "caddy: $caddy"
 
 $tunnelExe = $null
@@ -163,6 +164,13 @@ if (Test-PortOpen -Port $gw.port) {
 $caddyfilePath = Join-Path (Get-StateDir -Config $config) 'Caddyfile.generated'
 $gatewayInfo = New-Caddyfile -Config $config -OutPath $caddyfilePath
 Write-Ok "Routes: $($gatewayInfo.ExposedPrefixes) prefix(es) -> services, default -> '$($gatewayInfo.DefaultService)'"
+$authCfg = $data.auth
+if ($authCfg -and $authCfg.enabled -eq $true) {
+    $authUser = if ($authCfg.username) { $authCfg.username } else { 'demo' }
+    Write-Ok "Auth: basic_auth enabled (user '$authUser')"
+} else {
+    Write-Warn2 "Auth: DISABLED - anyone with the link can open the demo"
+}
 
 $gwProc = Start-LoggedProcess -FilePath $caddy -ArgumentList @('run','--config',$caddyfilePath,'--adapter','caddyfile') -Name 'gateway' -WorkingDirectory $config.Dir -LogDir (Get-StateDir -Config $config)
 $pids['gateway'] = $gwProc.Pid
