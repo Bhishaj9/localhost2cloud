@@ -1,0 +1,13 @@
+# Session state: live tunnel URL, PIDs, logs, generated Caddyfile
+.demo-state/
+
+# Per-project config is intentionally NOT ignored - users may want to commit theirs,
+# but the example is what ships here.
+# demo.config.json
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp

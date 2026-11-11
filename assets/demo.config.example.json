@@ -1,0 +1,44 @@
+{
+  "_readme": [
+    "Copy this file to your project root as demo.config.json and edit it.",
+    "Fields:",
+    "  services[]  - everything the demo needs running. Order matters (dependencies first).",
+    "    name        unique id, used for logs and the state file",
+    "    command     executable to run (e.g. node, npx, dotnet, python, java)",
+    "    startArgs   arguments for a production start",
+    "    buildCommand optional; executable that runs the build (e.g. npx, npm)",
+    "    buildArgs   optional; arguments for buildCommand, run before start when not in -DevMode",
+    "    dir         working directory, relative to demo.config.json",
+    "    port        local port it listens on",
+    "    healthUrl   polled until it answers; the boot waits for this",
+    "    expose      URL path prefixes the browser must reach on THIS service",
+    "    default     true for the one service that serves everything else",
+    "    managed     false to declare a service the skill must never start (e.g. a shared DB)",
+    "    verifyPath  optional path probed through the public URL (defaults to healthUrl's path)",
+    "    acceptStatus optional non-2xx codes that still mean 'reachable' (e.g. [401] for an auth-gated API)",
+    "    note        optional string printed after a successful boot",
+    "    devMode     optional { startArgs } used when Start-Demo.ps1 -DevMode",
+    "  gateway      the single local origin every browser request goes through",
+    "    port        local port for the gateway (one tunnel targets this)",
+    "  notes[]      optional strings printed after a successful boot"
+  ],
+  "services": [
+    {
+      "name": "app",
+      "command": "node",
+      "startArgs": ["node_modules/next/dist/bin/next", "start", "-p", "3000"],
+      "buildCommand": "npx",
+      "buildArgs": ["next", "build"],
+      "dir": ".",
+      "port": 3000,
+      "healthUrl": "http://127.0.0.1:3000/",
+      "default": true
+    }
+  ],
+  "gateway": {
+    "port": 8081
+  },
+  "notes": [
+    "Cloudflare quick tunnels have no access control. Share the link only with the demo audience and stop the demo when done."
+  ]
+}
