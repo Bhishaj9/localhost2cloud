@@ -3,13 +3,13 @@ name: localhost2cloud
 description: Boot a local app on this laptop and hand the user ONE public link their team can open like a cloud-hosted app, then tear it down on request. Use when the user says "boot it up", "start the demo", "give me a shareable link", "host this for my team", "make my laptop an EC2", "demo remotely", "stop the demo", or asks to expose a localhost app to remote viewers.
 argument-hint: "[boot|stop|status|setup] [path-to-demo.config.json]"
 license: MIT
-compatibility: Windows (PowerShell 5.1+) or macOS/Linux (bash 4+, curl, python3 or jq). Needs cloudflared (tunnel) and caddy (single-origin gateway); Install-Tools.ps1 / install-tools.sh provision both.
+compatibility: Windows (PowerShell 5.1+) or macOS/Linux (bash 4+, curl, python3 or jq). Needs cloudflared (tunnel) and caddy (single-origin gateway); install-tools.sh / Install-Tools.ps1 provision both.
 metadata:
   author: command-code
   version: "1.0.0"
 ---
 
-# Demo Tunnel
+# localhost2cloud
 
 Turn this laptop into a temporary "EC2" for a remote demo: boot the app stack, produce
 one `https://...` link, share it, and close it when the audience is done. No Google Meet
@@ -80,25 +80,25 @@ Run these from the project root (they auto-discover `demo.config.json` upward).
    "First-time setup", then come back.
 2. **Preflight the app-level traps** (below). Do this *before* booting — a demo link that
    loads a page which cannot connect is worse than no link.
-3. **Run `Start-Demo.ps1`.** It verifies each service, reuses what is already healthy,
-   generates the gateway, opens the tunnel, and probes the public URL end to end. The last
-   line is the link.
+3. **Run the start script for this platform** (`start.sh` or `Start-Demo.ps1`). It verifies
+   each service, reuses what is already healthy, generates the gateway, opens the tunnel, and
+   probes the public URL end to end. The last line is the link.
 4. **Report the link to the user** on its own line, and state plainly that anyone holding it
    can open it, and that it dies when the user stops the demo.
 5. **Do not paste the link into anything external** (email, chat tool, issue, PR) on your own.
    The user shares it.
-6. **After feedback, run `Stop-Demo.ps1`** as soon as the user says they are done. Confirm the
-   link is dead. Leave the user's pre-existing services alone (`Stop-Demo.ps1` does this by
-   default).
+6. **After feedback, run the stop script** (`stop.sh` / `Stop-Demo.ps1`) as soon as the user
+   says they are done. Confirm the link is dead. Leave the user's pre-existing services alone
+   (the stop script does this by default).
 
 Never leave the tunnel running after the demo ends — an anonymous public URL pointed at the
 user's laptop is exactly the thing to forget about.
 
 ## Workflow: "stop it" / "they're done"
 
-`Stop-Demo.ps1`, then report what was stopped. If the user wants the whole stack down too,
-`Stop-Demo.ps1 -IncludeReused` — but it still refuses to kill services it never started, and
-will name any port still held so the user can decide.
+`stop.sh` / `Stop-Demo.ps1`, then report what was stopped. If the user wants the whole stack
+down too, add `--include-reused` / `-IncludeReused` — but it still refuses to kill services it
+never started, and will name any port still held so the user can decide.
 
 ## Preflight: the traps that only show up remotely
 

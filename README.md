@@ -5,7 +5,7 @@ gives you a single shareable `https://` link your team can open in a browser —
 screen share, no account with a tunnel provider.
 
 ```
-$ .\Start-Demo.ps1
+$ ./scripts/start.sh
 
 ======================================================================
   SHARE THIS LINK
@@ -14,7 +14,7 @@ $ .\Start-Demo.ps1
 
 ======================================================================
   All checks passed from the public internet.
-  When they are done:  .\Stop-Demo.ps1
+  When they are done:  ./stop.sh
 ```
 
 Built as an [Agent Skill](https://agentskills.io/specification) for
@@ -25,10 +25,10 @@ Built as an [Agent Skill](https://agentskills.io/specification) for
 ## The problem it actually solves
 
 Exposing `localhost:3000` with a tunnel is the easy part. The part that breaks is that real
-apps talk to more than one port: our frontend served the page on `3100` while the browser
-opened its WebSocket to `7500`. A tunnel points at **one** local address, so remote viewers
-got a page that loaded fine and then silently failed to connect — working locally, broken in
-the cloud, and nothing in the logs said why.
+apps talk to more than one port: a frontend served the page on `3100` while the browser opened
+its WebSocket to `7500`. A tunnel points at **one** local address, so remote viewers got a
+page that loaded fine and then silently failed to connect — working locally, broken in the
+cloud, and nothing in the logs said why.
 
 `localhost2cloud` puts every service behind **one local origin** and tunnels that:
 
@@ -147,9 +147,42 @@ for when that is the better choice.
 | `acceptStatus` | Non-2xx codes that still mean "reachable" (e.g. `[401]` for an auth-gated API) |
 | `managed` | `false` to declare a service the skill must never start |
 | `note` | Printed after a successful boot |
-| `devMode` | `{ "startArgs": [...] }` used with `-DevMode` |
+| `devMode` | `{ "startArgs": [...] }` used with `--dev` / `-DevMode` |
 
 `.demo-state/` holds the session, logs and generated Caddyfile. It is gitignored.
+
+---
+
+## Using it as an Agent Skill
+
+The repo root *is* a skill (`SKILL.md` + `scripts/` + `assets/` + `references/`). To let an
+agent drive it, install it where your tool looks for skills:
+
+```bash
+git clone https://github.com/Bhishaj9/localhost2cloud.git ~/.commandcode/skills/localhost2cloud
+```
+
+Then just say "boot it up" / "give me a demo link" / "stop the demo". The `SKILL.md` carries
+the agent-facing playbook, including the preflight checks that catch the app-level problems a
+tunnel exposes (client code hardcoding `127.0.0.1`, framework dev-server origin guards,
+secrets that become public the moment the link is shared).
+
+Skills are indexed at agent startup, so a freshly cloned skill becomes invocable on the next
+session. Until then, the scripts run fine by hand.
+
+---
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Page loads, but live/chat/voice data never arrives | Client code dials `127.0.0.1` or a different port | Make the socket same-origin (empty host / relative path), then rebuild |
+| `403` from the dev server, or "Blocked cross-origin request" | Framework host guard | Add the tunnel domain to `allowedDevOrigins` / `allowedHosts`, or use a production build |
+| Public URL returns `530` right after boot | Cloudflare edge DNS hasn't propagated | Wait 30–75s; both `start` and `status` retry |
+| `Port N is held by X but health is not responding` | A leftover or hung process owns the port | The tool won't kill it. Identify it, then stop it yourself |
+| Tunnel exits immediately | `cloudflared` missing or blocked | Run `install-tools.sh` / `Install-Tools.ps1` |
+| Link worked, then died mid-demo | Laptop slept, VPN flipped, or Wi-Fi changed | `status`, then `stop` + `start` (new URL — reshare it) |
+| Health OK but the page is blank | Absolute base URL or a 404 on bundled assets | Check `curl -I <url>/assets/...`; fix the base path |
 
 ---
 
@@ -167,15 +200,16 @@ proxy reached the service.
 
 **Production builds by default.** Framework dev servers block unknown `Host`/`Origin` headers
 (Next.js `allowedDevOrigins`, Vite `allowedHosts`), which breaks through tunnels. `next start`
-has no such guard. Use `-DevMode` only when you want hot reload, and allowlist the tunnel
-domain first.
+has no such guard. Use `--dev` / `-DevMode` only when you want hot reload, and allowlist the
+tunnel domain first.
 
 ---
 
 ## Security
 
 A free quick tunnel is **public with no authentication** — anyone with the URL gets in. Treat
-the link as a password, keep demo windows short, and always run `Stop-Demo.ps1` afterwards.
+the link as a password, keep demo windows short, and always run `./stop.sh` /
+`Stop-Demo.ps1` afterwards.
 
 Do not demo screens showing customer data, credentials, or secrets. Anything the app injects
 server-side stays server-side; anything in a client bundle is public.
@@ -189,10 +223,11 @@ behind Caddy. See [`references/providers.md`](references/providers.md).
 
 Fully supported on **macOS, Linux and Windows**:
 
-| Platform | Implementation | Notes |
+| Platform | Implementation | Verified |
 |---|---|---|
-| macOS / Linux | `scripts/*.sh` (bash) | Verified on Ubuntu with a live Cloudflare tunnel |
-| Windows | `scripts/*.ps1` (PowerShell 5.1+) | No PowerShell 7 dependency |
+| Linux | `scripts/*.sh` (bash) | End to end on Ubuntu 26.04 with a live Cloudflare tunnel |
+| Windows | `scripts/*.ps1` (PowerShell 5.1+) | End to end on Windows 11; no PowerShell 7 dependency |
+| macOS | `scripts/*.sh` (bash) | Same code path as Linux and `install-tools.sh` prefers brew, but **not yet run on a Mac** |
 
 The bash port needs `bash` 4+, `curl`, and either `python3` or `jq` for JSON. Port ownership
 uses `lsof`, falling back to `ss` then `netstat`, so it works on minimal containers too.

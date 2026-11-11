@@ -17,7 +17,7 @@
     "    verifyPath  optional path probed through the public URL (defaults to healthUrl's path)",
     "    acceptStatus optional non-2xx codes that still mean 'reachable' (e.g. [401] for an auth-gated API)",
     "    note        optional string printed after a successful boot",
-    "    devMode     optional { startArgs } used when Start-Demo.ps1 -DevMode",
+    "    devMode     optional { startArgs } used with --dev (or -DevMode on Windows)",
     "  gateway      the single local origin every browser request goes through",
     "    port        local port for the gateway (one tunnel targets this)",
     "  notes[]      optional strings printed after a successful boot"
