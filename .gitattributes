@@ -1,0 +1,13 @@
+# Shell scripts must keep LF endings or they fail with
+# "bad interpreter: /usr/bin/env: No such file or directory" on macOS/Linux.
+*.sh text eol=lf
+
+# PowerShell is fine with either, but keep it explicit.
+*.ps1 text eol=crlf
+
+# JSON / Markdown / license: normalise.
+*.json text eol=lf
+*.md text eol=lf
+LICENSE text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf

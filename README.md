@@ -48,16 +48,23 @@ never drift from what the app actually needs.
 
 ## Quick start
 
+Works on **macOS, Linux and Windows**. Two equivalent implementations ship in `scripts/` —
+bash for macOS/Linux, PowerShell for Windows. Same config, same behaviour, interchangeable
+state file.
+
 **1. Install the two tools** (cloudflared + caddy, one time):
 
+```bash
+./scripts/install-tools.sh          # macOS / Linux
+```
 ```powershell
-.\scripts\Install-Tools.ps1
+.\scripts\Install-Tools.ps1         # Windows
 ```
 
 **2. Describe your stack.** Copy the annotated template to your project root:
 
-```powershell
-Copy-Item .\assets\demo.config.example.json D:\YourProject\demo.config.json
+```bash
+cp assets/demo.config.example.json /path/to/YourProject/demo.config.json
 ```
 
 ```json
@@ -80,15 +87,15 @@ Copy-Item .\assets\demo.config.example.json D:\YourProject\demo.config.json
 
 **3. Boot it:**
 
-```powershell
-cd D:\YourProject
-.\path\to\localhost2cloud\scripts\Start-Demo.ps1
+```bash
+cd /path/to/YourProject
+/path/to/localhost2cloud/scripts/start.sh        # or Start-Demo.ps1 on Windows
 ```
 
 Share the link. When feedback is done:
 
-```powershell
-.\path\to\localhost2cloud\scripts\Stop-Demo.ps1
+```bash
+/path/to/localhost2cloud/scripts/stop.sh         # or Stop-Demo.ps1
 ```
 
 Scripts find `demo.config.json` by walking up from the current directory, so they work in any
@@ -98,23 +105,27 @@ project without flags.
 
 ## Commands
 
+macOS / Linux:
+
 | Command | What it does |
 |---|---|
-| `Start-Demo.ps1` | Boot the stack, open a tunnel, print the link, verify it publicly |
-| `Status-Demo.ps1` | Check processes, ports, routing and the public URL; re-print the link |
-| `Stop-Demo.ps1` | Close the link and stop what this skill started |
-| `Install-Tools.ps1` | Install `cloudflared` and `caddy` (winget, else direct download) |
+| `scripts/start.sh` | Boot the stack, open a tunnel, print the link, verify it publicly |
+| `scripts/status.sh` | Check processes, ports, routing and the public URL; re-print the link |
+| `scripts/stop.sh` | Close the link and stop what this skill started |
+| `scripts/install-tools.sh` | Install `cloudflared` and `caddy` (brew/apt/dnf, else release binary) |
+
+Windows: `Start-Demo.ps1`, `Status-Demo.ps1`, `Stop-Demo.ps1`, `Install-Tools.ps1`.
 
 Useful flags:
 
-```powershell
-Start-Demo.ps1 -Provider none   # local only, no public exposure
-Start-Demo.ps1 -DevMode         # use each service's devMode args (hot reload)
-Start-Demo.ps1 -Force           # tear down a stale session and restart
-Stop-Demo.ps1   -IncludeReused  # also stop services that were already running
+```bash
+./start.sh --provider none    # local only, no public exposure  (-Provider none on Windows)
+./start.sh --dev              # use each service's devMode args (-DevMode)
+./start.sh --force            # tear down a stale session and restart (-Force)
+./stop.sh  --include-reused   # also stop services that were already running
 ```
 
-Also supports `-Provider ngrok` — see [`references/providers.md`](references/providers.md)
+Also supports `--provider ngrok` — see [`references/providers.md`](references/providers.md)
 for when that is the better choice.
 
 ---
@@ -176,10 +187,15 @@ behind Caddy. See [`references/providers.md`](references/providers.md).
 
 ## Platform support
 
-Written for **Windows + PowerShell 5.1+** (no PowerShell 7 dependency). The design is
-platform-neutral — the only OS-specific parts are `Start-LoggedProcess` and the port probing in
-[`scripts/common.ps1`](scripts/common.ps1). A POSIX `bash` port is a welcome contribution: the
-tmux-equivalent is backgrounding with `nohup`/`setsid` plus `ss`/`lsof` for port ownership.
+Fully supported on **macOS, Linux and Windows**:
+
+| Platform | Implementation | Notes |
+|---|---|---|
+| macOS / Linux | `scripts/*.sh` (bash) | Verified on Ubuntu with a live Cloudflare tunnel |
+| Windows | `scripts/*.ps1` (PowerShell 5.1+) | No PowerShell 7 dependency |
+
+The bash port needs `bash` 4+, `curl`, and either `python3` or `jq` for JSON. Port ownership
+uses `lsof`, falling back to `ss` then `netstat`, so it works on minimal containers too.
 
 ---
 
@@ -188,9 +204,10 @@ tmux-equivalent is backgrounding with `nohup`/`setsid` plus `ss`/`lsof` for port
 Issues and PRs welcome. Guidelines:
 
 - Keep the single-origin invariant. A second tunnel is never the answer.
-- New config fields need a matching line in `assets/demo.config.example.json` and this README.
-- Test the full cycle before opening a PR: `Start-Demo.ps1` → `Status-Demo.ps1` → `Stop-Demo.ps1`,
-  and confirm nothing is left listening.
+- New config fields need a matching line in `assets/demo.config.example.json`, both
+  implementations (`common.sh` and `common.ps1`), and this README.
+- Test the full cycle before opening a PR: `start` → `status` → `stop`, and confirm nothing
+  is left listening and the public URL is dead.
 
 ## License
 

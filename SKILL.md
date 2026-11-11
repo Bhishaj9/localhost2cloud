@@ -3,7 +3,7 @@ name: localhost2cloud
 description: Boot a local app on this laptop and hand the user ONE public link their team can open like a cloud-hosted app, then tear it down on request. Use when the user says "boot it up", "start the demo", "give me a shareable link", "host this for my team", "make my laptop an EC2", "demo remotely", "stop the demo", or asks to expose a localhost app to remote viewers.
 argument-hint: "[boot|stop|status|setup] [path-to-demo.config.json]"
 license: MIT
-compatibility: Windows host with PowerShell 5.1+. Needs cloudflared (tunnel) and caddy (single-origin gateway); Install-Tools.ps1 provisions both. macOS/Linux work if you substitute the equivalent tunnel and proxy commands.
+compatibility: Windows (PowerShell 5.1+) or macOS/Linux (bash 4+, curl, python3 or jq). Needs cloudflared (tunnel) and caddy (single-origin gateway); Install-Tools.ps1 / install-tools.sh provision both.
 metadata:
   author: command-code
   version: "1.0.0"
@@ -42,11 +42,29 @@ from the config. Never hand-write the Caddyfile; never add a second tunnel.
 
 ## Commands
 
+Two equivalent implementations ship in `scripts/`:
+**`*.ps1`** (Windows PowerShell) and **`*.sh`** (macOS/Linux bash). Pick by platform; the
+behaviour and config format are identical, and the state file is interchangeable.
+
 Run these from the project root (they auto-discover `demo.config.json` upward).
+
+**macOS / Linux**
 
 | Intent | Command |
 |---|---|
-| Boot and print the link | `powershell -File <skill>/scripts/Start-Demo.ps1` |
+| Boot and print the link | `<skill>/scripts/start.sh` |
+| Boot, local only (no public URL) | `... start.sh --provider none` |
+| Rebuild/restart cleanly | `... start.sh --force` |
+| Boot with hot reload | `... start.sh --dev` |
+| Re-print / health-check the link | `... status.sh` |
+| Close the link | `... stop.sh` |
+| First-time tool install | `... install-tools.sh` |
+
+**Windows**
+
+| Intent | Command |
+|---|---|
+| Boot and print the link | `powershell -File <skill>\scripts\Start-Demo.ps1` |
 | Boot, local only (no public URL) | `... Start-Demo.ps1 -Provider none` |
 | Rebuild/restart cleanly | `... Start-Demo.ps1 -Force` |
 | Boot with hot reload | `... Start-Demo.ps1 -DevMode` |
@@ -54,7 +72,7 @@ Run these from the project root (they auto-discover `demo.config.json` upward).
 | Close the link | `... Stop-Demo.ps1` |
 | First-time tool install | `... Install-Tools.ps1` |
 
-`<skill>` is this skill's directory, e.g. `C:\Users\<you>\.commandcode\skills\localhost2cloud`.
+`<skill>` is this skill's directory, e.g. `~/.commandcode/skills/localhost2cloud`.
 
 ## Workflow: "boot it up"
 
@@ -142,7 +160,7 @@ if left alone.
 |---|---|---|
 | Page loads but no live/chat/voice data | Client socket points at `127.0.0.1` or another port | Same-origin socket path (preflight #1), then rebuild |
 | `403 Forbidden` from dev server, or "Blocked cross-origin request" | Framework host guard | Add the tunnel domain to `allowedDevOrigins` / `allowedHosts`, or use production mode |
-| Public URL returns `530` right after boot | Cloudflare edge DNS not propagated yet | Wait 15–60s; `Status-Demo.ps1` retries |
+| Public URL returns `530` right after boot | Cloudflare edge DNS not propagated yet | Wait 30–75s; the boot check and `status` both retry |
 | `Port ... is held by ... but health is not responding` | A leftover/hung process owns the port (often Docker Desktop) | The skill will not kill it. Identify it, ask the user, then stop it |
 | Tunnel process exits immediately | `cloudflared` binary missing or blocked | `Install-Tools.ps1` |
 | Link works, then dies mid-demo | Laptop slept, VPN flip, or Wi-Fi change | `Status-Demo.ps1`; if the tunnel is down, `Stop-Demo.ps1` then `Start-Demo.ps1` (new URL — reshare) |
@@ -151,7 +169,7 @@ if left alone.
 
 ## Reference
 
-- `scripts/common.ps1` — discovery, probing, state, Caddyfile generation. Read it before
-  changing behaviour; every script depends on its contracts.
+- `scripts/common.ps1` / `scripts/common.sh` — discovery, probing, state, Caddyfile
+  generation. Read before changing behaviour; every script depends on its contracts.
 - `assets/demo.config.example.json` — annotated config template with every field explained.
 - Provider alternatives and their trade-offs: `references/providers.md`.

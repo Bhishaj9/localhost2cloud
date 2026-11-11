@@ -227,9 +227,12 @@ foreach ($svc in $data.services) {
     if ($svc.acceptStatus) { foreach ($c in $svc.acceptStatus) { $accept += [int]$c } }
     $url = "$publicUrl$path"
     $ok = $false
-    for ($i = 1; $i -le 8; $i++) {
+    # Quick tunnels need DNS to propagate at the Cloudflare edge; a fresh
+    # hostname can take ~40-75s before the first request is served. Budget for
+    # that instead of reporting a false failure on a working link.
+    for ($i = 1; $i -le 15; $i++) {
         if (Test-Health -Url $url -TimeoutSeconds 20 -AcceptStatus $accept) { $ok = $true; break }
-        Start-Sleep -Seconds 3
+        Start-Sleep -Seconds 5
     }
     $checks += [pscustomobject]@{ What = "$($svc.name) $path"; Url = $url; Ok = $ok }
     if ($ok) { Write-Ok "$($svc.name) $path" } else { Write-Warn2 "$($svc.name) $path (not answering yet)" }
