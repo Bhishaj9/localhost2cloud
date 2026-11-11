@@ -35,14 +35,19 @@ step "Session started $(state_get 'StartedAt' 2>/dev/null || echo unknown) (prov
 printf '\n'
 
 check_pid() {
-  local key="$1" label="$2" pid
+  local key="$1" label="$2" pid start
   pid="$(state_get "Pids.$key" 2>/dev/null || true)"
+  start="$(state_get "Starts.$key" 2>/dev/null || true)"
   if [ -n "$pid" ]; then
-    if pid_alive "$pid"; then
-      printf '  %s%-12s running (pid %s)%s\n' "$C_GREEN" "$label" "$pid" "$C_RESET"
-    else
+    if ! pid_alive "$pid"; then
       printf '  %s%-12s DOWN (was pid %s)%s\n' "$C_RED" "$label" "$pid" "$C_RESET"
       healthy=0
+    elif ! proc_matches "$pid" "$start"; then
+      # The session is stale: that pid is somebody else's process now.
+      printf '  %s%-12s DOWN (pid %s was reused by another process)%s\n' "$C_RED" "$label" "$pid" "$C_RESET"
+      healthy=0
+    else
+      printf '  %s%-12s running (pid %s)%s\n' "$C_GREEN" "$label" "$pid" "$C_RESET"
     fi
   else
     printf '  %s%-12s external (not started by the demo)%s\n' "$C_GREY" "$label" "$C_RESET"

@@ -81,6 +81,7 @@ if ($Provider -eq 'cloudflare') {
 
 # --- 2. Services -----------------------------------------------------------
 $pids = [ordered]@{}
+$starts = [ordered]@{}
 
 foreach ($svc in $data.services) {
     Write-Step "Service '$($svc.name)' on port $($svc.port)"
@@ -138,6 +139,7 @@ foreach ($svc in $data.services) {
 
     $proc = Start-LoggedProcess -FilePath $exe -ArgumentList $launchArgs -Name $svc.name -WorkingDirectory $workDir -LogDir (Get-StateDir -Config $config)
     $pids[$svc.name] = $proc.Pid
+    $starts[$svc.name] = Get-ProcessStart -ProcessId $proc.Pid
     Write-Ok "Started (pid $($proc.Pid))"
 
     if (-not (Wait-Health -Url $svc.healthUrl -TimeoutSeconds 150 -Label "'$($svc.name)'")) {
@@ -164,6 +166,7 @@ Write-Ok "Routes: $($gatewayInfo.ExposedPrefixes) prefix(es) -> services, defaul
 
 $gwProc = Start-LoggedProcess -FilePath $caddy -ArgumentList @('run','--config',$caddyfilePath,'--adapter','caddyfile') -Name 'gateway' -WorkingDirectory $config.Dir -LogDir (Get-StateDir -Config $config)
 $pids['gateway'] = $gwProc.Pid
+$starts['gateway'] = Get-ProcessStart -ProcessId $gwProc.Pid
 Write-Ok "Started (pid $($gwProc.Pid))"
 
 $gwHealth = "http://127.0.0.1:$($gw.port)/"
@@ -196,6 +199,7 @@ if ($Provider -eq 'none') {
     $tunProc = Start-LoggedProcess -FilePath $tunnelExe -ArgumentList $tunnelArgs -Name 'tunnel' -WorkingDirectory $config.Dir -LogDir (Get-StateDir -Config $config)
     $tunnelPid = $tunProc.Pid
     $pids['tunnel'] = $tunnelPid
+    $starts['tunnel'] = Get-ProcessStart -ProcessId $tunnelPid
 
     $deadline = (Get-Date).AddSeconds(100)
     while ((Get-Date) -lt $deadline) {
@@ -247,6 +251,7 @@ $state = [pscustomobject]@{
     StartedAt = (Get-Date).ToString('o')
     DevMode   = [bool]$DevMode
     Pids      = [pscustomobject]$pids
+    Starts    = [pscustomobject]$starts
     Checks    = $checks
 }
 Save-DemoState -Config $config -State $state

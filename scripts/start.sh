@@ -47,13 +47,45 @@ case "$PROVIDER" in cloudflare|ngrok|none) ;; *) die "Unknown provider: $PROVIDE
 load_config "$CONFIG_PATH" || exit 1
 step "Project: $CFG_DIR"
 
+# A boot that dies halfway must not leak orphans, and two boots must not race.
+BOOT_LOCK_HELD=0
+STARTED=()
+CLEANED=0
+
+cleanup_on_interrupt() {
+  [ "$CLEANED" = 1 ] && return
+  CLEANED=1
+  release_boot_lock
+  if [ "${#STARTED[@]}" -gt 0 ]; then
+    printf '\n' >&2
+    warn "Interrupted - stopping what this boot had already started"
+    for entry in "${STARTED[@]}"; do
+      pid="${entry%%|*}"; name="${entry##*|}"
+      if pid_alive "$pid"; then
+        kill_tree_force "$pid"
+        printf '    %s stopped (pid %s)\n' "$name" "$pid" >&2
+      fi
+    done
+    # Partial state would make stop.sh chase processes that no longer exist.
+    clear_state 2>/dev/null || true
+  fi
+  exit 130
+}
+trap cleanup_on_interrupt INT TERM
+
+if ! acquire_boot_lock; then
+  die "Another boot is already running for this project. Wait for it, or run ./stop.sh first."
+fi
+
 # --- 0. Existing session ---------------------------------------------------
 if has_state && [ "$FORCE" != 'true' ]; then
   old_pid="$(state_get 'Pids.tunnel' 2>/dev/null || true)"
-  if [ -n "$old_pid" ] && pid_alive "$old_pid"; then
+  old_start="$(state_get 'Starts.tunnel' 2>/dev/null || true)"
+  if pid_alive "$old_pid" && proc_matches "$old_pid" "$old_start"; then
     bad "A demo is already running for this project."
     printf '    URL: %s%s%s\n' "$C_GREEN" "$(state_get 'Url')" "$C_RESET"
     warn "Re-run with -f/--force to restart, or run ./stop.sh first."
+    release_boot_lock
     exit 0
   fi
   warn "Found a stale session record; cleaning it up"
@@ -140,9 +172,11 @@ EOF
 $start_spec
 EOF
 
-  pid="$(start_logged "$name" "$workdir" "$LOGDIR" "$cmd" ${argv[@]+"${argv[@]}"})" || \
+  fingerprint="$(start_logged "$name" "$workdir" "$LOGDIR" "$cmd" ${argv[@]+"${argv[@]}"})" || \
     die "Could not start '$name'."
-  PIDS+=("$name=$pid")
+  pid="${fingerprint%%|*}"
+  PIDS+=("$name=$fingerprint")
+  STARTED+=("$pid|$name")
   ok "Started (pid $pid)"
 
   if ! wait_health "$(svc_var "$i" HEALTHURL)" 150 "'$name'"; then
@@ -167,9 +201,11 @@ CADDYFILE="$LOGDIR/Caddyfile.generated"
 gw_info="$(generate_caddyfile "$CADDYFILE")" || exit 1
 ok "Routes: ${gw_info%%|*} prefix(es) -> services, default -> '${gw_info#*|}'"
 
-gw_pid="$(start_logged gateway "$CFG_DIR" "$LOGDIR" "$CADDY" run --config "$CADDYFILE" --adapter caddyfile)" || \
+gw_fp="$(start_logged gateway "$CFG_DIR" "$LOGDIR" "$CADDY" run --config "$CADDYFILE" --adapter caddyfile)" || \
   die "Could not start the gateway."
-PIDS+=("gateway=$gw_pid")
+gw_pid="${gw_fp%%|*}"
+PIDS+=("gateway=$gw_fp")
+STARTED+=("$gw_pid|gateway")
 ok "Started (pid $gw_pid)"
 
 if ! wait_health "http://127.0.0.1:$GW_PORT/" 30 'the gateway'; then
@@ -188,16 +224,18 @@ else
   step "Opening $PROVIDER tunnel"
   target="http://127.0.0.1:$GW_PORT"
   if [ "$PROVIDER" = cloudflare ]; then
-    tun_pid="$(start_logged tunnel "$CFG_DIR" "$LOGDIR" "$TUNNEL_EXE" tunnel --url "$target" --no-autoupdate)" || \
+    tun_fp="$(start_logged tunnel "$CFG_DIR" "$LOGDIR" "$TUNNEL_EXE" tunnel --url "$target" --no-autoupdate)" || \
       die "Could not start cloudflared."
     url_pattern='https://[a-z0-9-]+\.trycloudflare\.com'
   else
-    tun_pid="$(start_logged tunnel "$CFG_DIR" "$LOGDIR" "$TUNNEL_EXE" http "$target" --log stdout)" || \
+    tun_fp="$(start_logged tunnel "$CFG_DIR" "$LOGDIR" "$TUNNEL_EXE" http "$target" --log stdout)" || \
       die "Could not start ngrok."
     url_pattern='https://[a-z0-9-]+\.ngrok-free\.(app|dev)'
   fi
+  tun_pid="${tun_fp%%|*}"
   TUNNEL_PID="$tun_pid"
-  PIDS+=("tunnel=$tun_pid")
+  PIDS+=("tunnel=$tun_fp")
+  STARTED+=("$tun_pid|tunnel")
 
   deadline=$(( $(date +%s) + 100 ))
   while [ "$(date +%s)" -lt "$deadline" ]; do
@@ -248,6 +286,9 @@ done
 
 # --- 6. Save + report ------------------------------------------------------
 save_state "$PUBLIC_URL" "$PROVIDER" "$DEVMODE" ${PIDS[@]+"${PIDS[@]}"}
+# State is on disk and the stack is healthy: the boot is complete, so another
+# boot may now legitimately start (it will see the session and refuse).
+release_boot_lock
 
 printf '\n'
 printf '%s%s%s\n' "$C_GREY" "======================================================================" "$C_RESET"

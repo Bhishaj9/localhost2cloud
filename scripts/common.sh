@@ -28,7 +28,12 @@ warn() { printf '%s    %s%s\n' "$C_YELLOW" "$*" "$C_RESET"; }
 bad()  { printf '%s    %s%s\n' "$C_RED" "$*" "$C_RESET"; }
 grey() { printf '%s    %s%s\n' "$C_GREY" "$*" "$C_RESET"; }
 
-die() { bad "$*" >&2; exit 1; }
+die() {
+  # A fatal error during a boot must not strand the lock.
+  if [ "${BOOT_LOCK_HELD:-0}" = 1 ]; then release_boot_lock 2>/dev/null || true; fi
+  bad "$*" >&2
+  exit 1
+}
 
 # ---------------------------------------------------------------------------
 # JSON backend
@@ -254,24 +259,25 @@ state_dir() {
   printf '%s' "$d"
 }
 
-# save_state <url> <provider> <logdir> then KEY=PID pairs via stdin-friendly args
-# Writes JSON so the PowerShell and POSIX versions stay interchangeable.
+# save_state <url> <provider> <devmode> then NAME=pid|start pairs.
+# Pids[name] holds the numeric pid (or null); Starts[name] holds the identity
+# string. Keeping them separate keeps the JSON readable and makes "null pid,
+# reused process" representable.
 save_state() {
   local url="$1" provider="$2" devmode="$3"; shift 3
   local dir; dir="$(state_dir)"
   local file="$dir/session.json"
-  local pairs=""
-  local p
-  for p in "$@"; do pairs="$pairs $p"; done
   if [ "$(json_backend)" = python3 ]; then
-    python3 - "$file" "$CFG_PATH" "$CFG_DIR" "$url" "$provider" "$devmode" $pairs <<'PY'
+    python3 - "$file" "$CFG_PATH" "$CFG_DIR" "$url" "$provider" "$devmode" "$@" <<'PY'
 import json, sys, datetime
 file, cfgpath, cfgdir, url, provider, devmode = sys.argv[1:7]
 pairs = sys.argv[7:]
-pids = {}
+pids, starts = {}, {}
 for p in pairs:
     k, _, v = p.partition('=')
-    pids[k] = int(v) if v.strip().isdigit() else None
+    pid, _, start = v.partition('|')
+    pids[k] = int(pid) if pid.strip().isdigit() else None
+    starts[k] = start or None
 state = {
     "Project": cfgdir,
     "ConfigPath": cfgpath,
@@ -280,19 +286,24 @@ state = {
     "StartedAt": datetime.datetime.now().astimezone().isoformat(),
     "DevMode": devmode == "true",
     "Pids": pids,
+    "Starts": starts,
 }
 json.dump(state, open(file, 'w', encoding='utf-8'), indent=2)
 PY
   else
-    local j="{" first=1
+    # jq fallback: build the JSON without a JSON parser on the shell side.
+    local pids_json='{' starts_json='{' first=1
     for p in "$@"; do
-      local k="${p%%=*}" v="${p#*=}"
-      [ $first -eq 1 ] || j="$j,"
+      local k="${p%%=*}" v="${p#*=}" pid="${v%%|*}" start="${v#*|}"
+      [ $first -eq 1 ] || { pids_json="$pids_json,"; starts_json="$starts_json,"; }
       first=0
-      if [ -n "$v" ]; then j="$j\"$k\":$v"; else j="$j\"$k\":null"; fi
+      if [ -n "$pid" ]; then pids_json="$pids_json\"$k\":$pid"; else pids_json="$pids_json\"$k\":null"; fi
+      if [ -n "$start" ]; then starts_json="$starts_json\"$k\":\"$(printf '%s' "$start" | sed 's/"/\\"/g')\""; else starts_json="$starts_json\"$k\":null"; fi
     done
-    printf '{"Project":"%s","ConfigPath":"%s","Provider":"%s","Url":"%s","DevMode":%s,"Pids":%s}\n' \
-      "$CFG_DIR" "$CFG_PATH" "$provider" "$url" "$([ "$devmode" = true ] && echo true || echo false)" "$j" > "$file"
+    pids_json="$pids_json}"; starts_json="$starts_json}"
+    printf '{"Project":"%s","ConfigPath":"%s","Provider":"%s","Url":"%s","DevMode":%s,"Pids":%s,"Starts":%s}\n' \
+      "$CFG_DIR" "$CFG_PATH" "$provider" "$url" "$([ "$devmode" = true ] && echo true || echo false)" \
+      "$pids_json" "$starts_json" > "$file"
   fi
 }
 
@@ -324,10 +335,84 @@ has_state() { [ -f "$CFG_DIR/.demo-state/session.json" ]; }
 clear_state() { rm -f "$CFG_DIR/.demo-state/session.json"; }
 
 # ---------------------------------------------------------------------------
+# Boot lock
+# ---------------------------------------------------------------------------
+# Two concurrent boots race between "is the port free" and "bind the port",
+# which yields duplicate gateways or half-written state. mkdir is atomic on
+# every POSIX filesystem, which makes it a portable lock without flock(1).
+
+# Computed lazily: CFG_DIR is only known after load_config runs, and the lock
+# must be per-project or two projects would block each other.
+boot_lock_dir() {
+  printf '%s/localhost2cloud-%s.lock' "${TMPDIR:-/tmp}" "$(printf '%s' "$CFG_DIR" | cksum | cut -d' ' -f1)"
+}
+
+acquire_boot_lock() {
+  local owner
+  LOCK_DIR="$(boot_lock_dir)"
+  if mkdir "$LOCK_DIR" 2>/dev/null; then
+    printf '%s' "$$" > "$LOCK_DIR/pid"
+    BOOT_LOCK_HELD=1
+    return 0
+  fi
+  owner="$(cat "$LOCK_DIR/pid" 2>/dev/null || echo '')"
+  # A lock left behind by a dead process must not block forever.
+  if [ -n "$owner" ] && ! pid_alive "$owner"; then
+    warn "Clearing a stale boot lock (pid $owner is gone)"
+    rm -rf "$LOCK_DIR"
+    mkdir "$LOCK_DIR" 2>/dev/null || return 1
+    printf '%s' "$$" > "$LOCK_DIR/pid"
+    BOOT_LOCK_HELD=1
+    return 0
+  fi
+  return 1
+}
+
+release_boot_lock() {
+  [ "${BOOT_LOCK_HELD:-0}" = 1 ] || return 0
+  rm -rf "${LOCK_DIR:-}" 2>/dev/null || true
+  BOOT_LOCK_HELD=0
+}
+
+# ---------------------------------------------------------------------------
 # Process management
 # ---------------------------------------------------------------------------
+# PIDs get recycled, especially on Linux where pid_max is often 32768. A stale
+# session.json could therefore name a PID that now belongs to something else
+# entirely - and we would kill it. That breaks our "never kill what it did not
+# start" promise, so every recorded PID carries a fingerprint (its start time)
+# and is verified before any signal is sent.
 
 pid_alive() { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
+
+# proc_start <pid> -> stable identity string for that process, or empty.
+# Works on Linux and macOS without /proc. Falls back to empty if unavailable,
+# in which case the guard degrades to "process exists" rather than failing hard.
+proc_start() {
+  local pid="$1"
+  [ -n "$pid" ] || return 1
+  # -o lstart= gives e.g. "Tue Nov 11 18:30:36 2026" and is stable per process.
+  ps -p "$pid" -o lstart= 2>/dev/null | sed 's/^ *//; s/ *$//'
+}
+
+# proc_fingerprint <pid> -> "pid|start". The start may be empty on exotic
+# systems, in which case callers must treat identity as unverified.
+proc_fingerprint() {
+  local pid="$1" start
+  start="$(proc_start "$pid")" || true
+  printf '%s|%s' "$pid" "$start"
+}
+
+# proc_matches <pid> <recorded-start> -> 0 when this is still our process.
+# Empty recorded start means legacy/unverifiable: accept existence only, but
+# callers surface a warning so the degraded mode is visible, not silent.
+proc_matches() {
+  local pid="$1" want="$2" have
+  pid_alive "$pid" || return 1
+  [ -n "$want" ] || return 0
+  have="$(proc_start "$pid")" || return 1
+  [ "$have" = "$want" ]
+}
 
 # Kill a process and everything it spawned (Next spawns workers).
 kill_tree() {
@@ -352,7 +437,7 @@ kill_tree_force() {
   return 0
 }
 
-# start_logged <name> <workdir> <logdir> <cmd> [args...] -> prints PID
+# start_logged <name> <workdir> <logdir> <cmd> [args...] -> prints "pid|start"
 # nohup + background so the process outlives the script but stays killable.
 start_logged() {
   local name="$1" workdir="$2" logdir="$3"; shift 3
@@ -367,7 +452,11 @@ start_logged() {
     echo $! > "$pidfile"
   )
   [ -f "$pidfile" ] || return 1
-  cat "$pidfile"
+  local pid; pid="$(cat "$pidfile")"
+  # Give the child a moment so ps can resolve its start time.
+  local i=0
+  while [ -z "$(proc_start "$pid")" ] && [ "$i" -lt 10 ]; do sleep 0.1; i=$((i + 1)); done
+  proc_fingerprint "$pid"
 }
 
 log_text() {

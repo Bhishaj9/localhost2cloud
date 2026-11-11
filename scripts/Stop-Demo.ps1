@@ -59,8 +59,12 @@ $stopped = 0
 foreach ($name in $order) {
     if ($name -eq 'gateway' -and $KeepGateway) { continue }
     $procId = $null
+    $recordedStart = ''
     if ($state.Pids -and $state.Pids.PSObject.Properties[$name]) {
         $procId = $state.Pids.$name
+    }
+    if ($state.Starts -and $state.Starts.PSObject.Properties[$name] -and $state.Pids.PSObject.Properties[$name]) {
+        $recordedStart = [string]$state.Starts.$name
     }
     if (-not $procId) {
         # null means "was already running at boot". Only touch it if asked.
@@ -70,13 +74,19 @@ foreach ($name in $order) {
         continue
     }
     $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
-    if ($p) {
-        & taskkill /PID $procId /T /F 2>&1 | Out-Null
-        Write-Ok "$name stopped (pid $procId)"
-        $stopped++
-    } else {
+    if (-not $p) {
         Write-Ok "$name already gone (pid $procId)"
+        continue
     }
+    # Windows recycles PIDs too: verify identity before signalling, so a stale
+    # session can never make us kill an unrelated process.
+    if (-not (Test-ProcessMatches -ProcessId $procId -RecordedStart $recordedStart)) {
+        Write-Warn2 "$name : pid $procId now belongs to a different process (PID reused) - not touching it"
+        continue
+    }
+    Stop-ProcessTree -ProcessId $procId
+    Write-Ok "$name stopped (pid $procId)"
+    $stopped++
 }
 
 if ($IncludeReused) {

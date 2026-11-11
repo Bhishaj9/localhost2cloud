@@ -122,6 +122,36 @@ function Get-StateDir {
     return $d
 }
 
+function Get-ProcessStart {
+    # Stable per-process identity string. Windows also recycles PIDs, so a stale
+    # session could otherwise name an unrelated process and we would kill it.
+    param([int]$ProcessId)
+    try {
+        $p = Get-Process -Id $ProcessId -ErrorAction Stop
+        return $p.StartTime.ToUniversalTime().ToString('o')
+    } catch {
+        return ''
+    }
+}
+
+function Test-ProcessMatches {
+    # Returns $true only when this PID is still the process we started.
+    # An empty recorded start means the session predates fingerprinting: accept
+    # existence, so upgrades don't strand a running demo.
+    param([int]$ProcessId, [string]$RecordedStart)
+    $p = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+    if (-not $p) { return $false }
+    if (-not $RecordedStart) { return $true }
+    $now = Get-ProcessStart -ProcessId $ProcessId
+    return ($now -eq $RecordedStart)
+}
+
+function Stop-ProcessTree {
+    param([int]$ProcessId)
+    if (-not $ProcessId) { return }
+    & taskkill /PID $ProcessId /T /F 2>&1 | Out-Null
+}
+
 function Save-DemoState {
     param($Config, $State)
     $file = Join-Path (Get-StateDir -Config $Config) 'session.json'

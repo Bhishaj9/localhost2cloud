@@ -31,20 +31,25 @@ Write-Host ""
 $healthy = $true
 
 $rows = @()
-$rows += [pscustomobject]@{ Component = 'tunnel'; Pid = $state.Pids.Tunnel }
-$rows += [pscustomobject]@{ Component = 'gateway'; Pid = $state.Pids.Gateway }
+$rows += [pscustomobject]@{ Component = 'tunnel'; Pid = $state.Pids.Tunnel; Start = $(if ($state.Starts) { $state.Starts.Tunnel } else { '' }) }
+$rows += [pscustomobject]@{ Component = 'gateway'; Pid = $state.Pids.Gateway; Start = $(if ($state.Starts) { $state.Starts.Gateway } else { '' }) }
 foreach ($svc in $config.Data.services) {
-    $rows += [pscustomobject]@{ Component = $svc.name; Pid = $state.Pids.($svc.name) }
+    $svcStart = ''
+    if ($state.Starts -and $state.Starts.PSObject.Properties[$svc.name]) { $svcStart = [string]$state.Starts.($svc.name) }
+    $rows += [pscustomobject]@{ Component = $svc.name; Pid = $state.Pids.($svc.name); Start = $svcStart }
 }
 
 foreach ($row in $rows) {
     if ($row.Pid) {
         $p = Get-Process -Id $row.Pid -ErrorAction SilentlyContinue
-        if ($p) {
-            Write-Host ("  {0,-12} running (pid {1})" -f $row.Component, $row.Pid) -ForegroundColor Green
-        } else {
+        if (-not $p) {
             Write-Host ("  {0,-12} DOWN (was pid {1})" -f $row.Component, $row.Pid) -ForegroundColor Red
             $healthy = $false
+        } elseif (-not (Test-ProcessMatches -ProcessId $row.Pid -RecordedStart ([string]$row.Start))) {
+            Write-Host ("  {0,-12} DOWN (pid {1} was reused by another process)" -f $row.Component, $row.Pid) -ForegroundColor Red
+            $healthy = $false
+        } else {
+            Write-Host ("  {0,-12} running (pid {1})" -f $row.Component, $row.Pid) -ForegroundColor Green
         }
     } else {
         Write-Host ("  {0,-12} external (not started by the demo)" -f $row.Component) -ForegroundColor DarkGray

@@ -59,8 +59,9 @@ old_url="$(state_get 'Url' 2>/dev/null || true)"
 stopped=0
 
 stop_one() {
-  local key="$1" label="$2" pid
+  local key="$1" label="$2" pid start
   pid="$(state_get "Pids.$key" 2>/dev/null || true)"
+  start="$(state_get "Starts.$key" 2>/dev/null || true)"
   if [ -z "$pid" ]; then
     # A missing key means either "never started" (provider none, or reused) or
     # "reused, still running". Only say "left running" when something actually
@@ -71,13 +72,19 @@ stop_one() {
     ok "$label : left running (was already up before the demo)"
     return 0
   fi
-  if pid_alive "$pid"; then
-    kill_tree_force "$pid"
-    ok "$label stopped (pid $pid)"
-    stopped=$((stopped + 1))
-  else
+  if ! pid_alive "$pid"; then
     ok "$label already gone (pid $pid)"
+    return 0
   fi
+  # The PID may have been recycled since boot. Killing a stranger's process
+  # would break the core promise, so verify identity before signalling.
+  if ! proc_matches "$pid" "$start"; then
+    warn "$label : pid $pid now belongs to a different process (PID reused) - not touching it"
+    return 0
+  fi
+  kill_tree_force "$pid"
+  ok "$label stopped (pid $pid)"
+  stopped=$((stopped + 1))
 }
 
 if [ "$KEEP_GATEWAY" != 'true' ]; then
