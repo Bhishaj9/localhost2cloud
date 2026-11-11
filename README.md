@@ -52,9 +52,9 @@ Protocols` handshake through the public URL, with a round-tripped echo frame.
 
 ## Quick start
 
-Works on **macOS, Linux and Windows**. Two equivalent implementations ship in `scripts/` —
-bash for macOS/Linux, PowerShell for Windows. Same config, same behaviour, interchangeable
-state file.
+Works on **Windows** (primary). Linux uses the same bash scripts and is tested; macOS is
+untested. Two equivalent implementations ship in `scripts/` — bash for Linux/macOS, PowerShell
+for Windows. Same config, same behaviour, interchangeable state file.
 
 **1. Install the two tools** (cloudflared + caddy, one time):
 
@@ -276,16 +276,17 @@ identity-aware proxy.
 
 ## Platform support
 
-Fully supported on **macOS, Linux and Windows**:
+**Windows is the supported platform.** PowerShell 5.1+ (ships with Windows 10/11 — no
+PowerShell 7 needed).
 
-| Platform | Implementation | Verified |
+| Platform | Implementation | Status |
 |---|---|---|
-| Linux | `scripts/*.sh` (bash) | End to end on Ubuntu 26.04 with a live Cloudflare tunnel |
-| Windows | `scripts/*.ps1` (PowerShell 5.1+) | End to end on Windows 11; no PowerShell 7 dependency |
-| macOS | `scripts/*.sh` (bash) | Same code path as Linux and `install-tools.sh` prefers brew, but **not yet run on a Mac** |
+| Windows | `scripts/*.ps1` | **Supported.** Verified end to end on Windows 11 (build 26200) |
+| Linux | `scripts/*.sh` | Works; kept in sync and tested on Ubuntu 26.04 |
+| macOS | `scripts/*.sh` | Untested. The code paths match Linux but nobody has run it — treat as experimental |
 
-The bash port needs `bash` 4+, `curl`, and either `python3` or `jq` for JSON. Port ownership
-uses `lsof`, falling back to `ss` then `netstat`, so it works on minimal containers too.
+The bash port needs `bash` 4+, `curl`, and either `python3` or `jq`. Port ownership uses
+`lsof`, falling back to `ss` then `netstat`.
 
 ### Known limits
 

@@ -3,7 +3,7 @@ name: localhost2cloud
 description: Boot a local app on this laptop and hand the user ONE public link their team can open like a cloud-hosted app, then tear it down on request. Use when the user says "boot it up", "start the demo", "give me a shareable link", "host this for my team", "make my laptop an EC2", "demo remotely", "stop the demo", or asks to expose a localhost app to remote viewers.
 argument-hint: "[boot|stop|status|setup] [path-to-demo.config.json]"
 license: MIT
-compatibility: Windows (PowerShell 5.1+) or macOS/Linux (bash 4+, curl, python3 or jq). Needs cloudflared (tunnel) and caddy (single-origin gateway); install-tools.sh / Install-Tools.ps1 provision both.
+compatibility: Windows (PowerShell 5.1+) is the supported platform. Linux works via bash and is tested; macOS is untested. Needs cloudflared (tunnel) and caddy (single-origin gateway); Install-Tools.ps1 / install-tools.sh provision both.
 metadata:
   author: command-code
   version: "1.0.0"
