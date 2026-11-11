@@ -170,7 +170,7 @@ $starts['gateway'] = Get-ProcessStart -ProcessId $gwProc.Pid
 Write-Ok "Started (pid $($gwProc.Pid))"
 
 $gwHealth = "http://127.0.0.1:$($gw.port)/"
-if (-not (Wait-Health -Url $gwHealth -TimeoutSeconds 30 -Label 'the gateway')) {
+if (-not (Wait-Gateway -Url $gwHealth -TimeoutSeconds 30)) {
     Get-LogText -OutLog $gwProc.OutLog -ErrLog $gwProc.ErrLog | Select-Object -Last 25 | ForEach-Object { Write-Host "      $_" -ForegroundColor DarkGray }
     throw "Gateway did not come up."
 }

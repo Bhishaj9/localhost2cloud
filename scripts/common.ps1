@@ -152,6 +152,25 @@ function Stop-ProcessTree {
     & taskkill /PID $ProcessId /T /F 2>&1 | Out-Null
 }
 
+function Wait-Gateway {
+    # The gateway is ready once ANY HTTP status comes back. Probing "/" and
+    # demanding 2xx conflates "Caddy is up" with "the upstream serves a root
+    # route" - a service with only /health or /api would 404 and we would
+    # wrongly fail the boot.
+    param([string]$Url, [int]$TimeoutSeconds = 30)
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $r = Invoke-WebRequest -Uri $Url -TimeoutSec 5 -UseBasicParsing
+            if ($r.StatusCode -ge 200) { return $true }
+        } catch {
+            if ($_.Exception.Response) { return $true }  # 4xx/5xx still proves it is listening
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    return $false
+}
+
 function Save-DemoState {
     param($Config, $State)
     $file = Join-Path (Get-StateDir -Config $Config) 'session.json'

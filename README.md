@@ -44,6 +44,10 @@ browser ──▶ https://<random>.trycloudflare.com     (cloudflared)
 The gateway config is **generated from `demo.config.json` on every boot**, so routes can
 never drift from what the app actually needs.
 
+Because everything shares one origin, **WebSockets and SSE work with no extra configuration** —
+Caddy upgrades them transparently. This is verified end to end: a real `101 Switching
+Protocols` handshake through the public URL, with a round-tripped echo frame.
+
 ---
 
 ## Quick start

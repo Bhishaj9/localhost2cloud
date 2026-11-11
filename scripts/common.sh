@@ -249,6 +249,21 @@ wait_health() {
   return 1
 }
 
+# wait_gateway URL [timeout]
+# The gateway is ready once ANY HTTP status comes back. Probing "/" and demanding
+# 2xx conflates "Caddy is up" with "the upstream serves a root route" - a service
+# with only /health or /api would 404 and we would wrongly fail the boot.
+wait_gateway() {
+  local url="$1" timeout="${2:-30}"
+  local deadline; deadline=$(( $(date +%s) + timeout ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    local code; code="$(http_code "$url" 5)"
+    [ "$code" != 000 ] && return 0
+    sleep 0.5
+  done
+  return 1
+}
+
 # ---------------------------------------------------------------------------
 # State (per project, next to the config)
 # ---------------------------------------------------------------------------

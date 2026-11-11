@@ -208,7 +208,7 @@ PIDS+=("gateway=$gw_fp")
 STARTED+=("$gw_pid|gateway")
 ok "Started (pid $gw_pid)"
 
-if ! wait_health "http://127.0.0.1:$GW_PORT/" 30 'the gateway'; then
+if ! wait_gateway "http://127.0.0.1:$GW_PORT/" 30; then
   log_text gateway "$LOGDIR" | tail -n 25 | while IFS= read -r l; do grey "$l"; done
   die "Gateway did not come up."
 fi

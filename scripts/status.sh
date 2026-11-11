@@ -106,6 +106,33 @@ while [ "$i" -lt "$SVC_COUNT" ]; do
       printf '  %s%s -> %s : HTTP %s%s\n' "$C_YELLOW" "$expose" "$name" "$code" "$C_RESET"
       healthy=0
     fi
+  elif [ "$(svc_var "$i" DEFAULT)" = 'true' ]; then
+    # The default service owns everything not matched by expose[]. Probe a path
+    # it actually serves; "/" is often a 404 on an API-only service, and that
+    # is not a gateway fault.
+    vp="$(svc_var "$i" VERIFY)"
+    hu="$(svc_var "$i" HEALTHURL)"
+    if [ -z "$vp" ] && [ -n "$hu" ]; then
+      # Strip scheme and host, keep the path: http://h:p/health -> /health
+      vp="${hu#*://}"
+      case "$vp" in
+        */*) vp="/${vp#*/}" ;;
+        *)   vp='' ;;
+      esac
+    fi
+    probe="$GW_BASE$vp"
+    accepted="$(svc_var "$i" ACCEPT)"
+    code="$(http_code "$probe" 10)"
+    reachable=0
+    case "$code" in 000) ;; 5??) ;; *) reachable=1 ;; esac
+    for a in $accepted; do [ "$code" = "$a" ] && reachable=1; done
+    shown_path="${vp:-/}"
+    if [ "$reachable" -eq 1 ]; then
+      printf '  %s(default) %s -> %s : HTTP %s%s\n' "$C_GREEN" "$shown_path" "$name" "$code" "$C_RESET"
+    else
+      printf '  %s(default) %s -> %s : HTTP %s%s\n' "$C_YELLOW" "$shown_path" "$name" "$code" "$C_RESET"
+      healthy=0
+    fi
   elif [ "$(svc_var "$i" DEFAULT)" != 'true' ]; then
     printf '  %s%s : not routed through the gateway (local only on port %s)%s\n' \
       "$C_GREY" "$name" "$(svc_var "$i" PORT)" "$C_RESET"
