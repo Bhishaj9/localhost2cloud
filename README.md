@@ -218,6 +218,7 @@ session. Until then, the scripts run fine by hand.
 | `Port N is held by X but health is not responding` | A leftover or hung process owns the port | The tool won't kill it. Identify it, then stop it yourself |
 | Tunnel exits immediately | `cloudflared` missing or blocked | Run `install-tools.sh` / `Install-Tools.ps1` |
 | Link worked, then died mid-demo | Laptop slept, VPN flipped, or Wi-Fi changed | `status`, then `stop` + `start` (new URL — reshare it) |
+| Boot was killed / terminal closed / PC rebooted mid-demo | A hard kill cannot run cleanup | Just run `start` again — it reclaims the orphans from its journal automatically, or run `stop` first to only tear down |
 | Health OK but the page is blank | Absolute base URL or a 404 on bundled assets | Check `curl -I <url>/assets/...`; fix the base path |
 
 ---
@@ -233,6 +234,12 @@ rather than silently demoing old code.
 **Verification is real.** After booting it fetches the public URL from outside, so "the link is
 up" is measured, not assumed. Auth-gated endpoints count a `401` as success — it proves the
 proxy reached the service.
+
+**A killed boot cleans itself up.** What the tool starts is journalled to disk *as each
+process launches*, not only at the end. If the terminal is closed, the process killed with
+`taskkill /F`, or the machine reboots mid-boot, the next run reads that journal, stops the
+orphans it names, and clears the stale lock before booting. A hard kill cannot run cleanup
+code, so recovery happens on the next run rather than never.
 
 **Production builds by default.** Framework dev servers block unknown `Host`/`Origin` headers
 (Next.js `allowedDevOrigins`, Vite `allowedHosts`), which breaks through tunnels. `next start`

@@ -302,15 +302,20 @@ state_dir() {
 # Pids[name] holds the numeric pid (or null); Starts[name] holds the identity
 # string. Keeping them separate keeps the JSON readable and makes "null pid,
 # reused process" representable.
+# COMPLETE (optional env) marks whether the boot finished; false means a partial
+# journal that a later boot should reclaim.
 save_state() {
   local url="$1" provider="$2" devmode="$3"; shift 3
   local dir; dir="$(state_dir)"
   local file="$dir/session.json"
+  local complete="${SESSION_COMPLETE:-true}"
   if [ "$(json_backend)" = python3 ]; then
-    python3 - "$file" "$CFG_PATH" "$CFG_DIR" "$url" "$provider" "$devmode" "$@" <<'PY'
-import json, sys, datetime
-file, cfgpath, cfgdir, url, provider, devmode = sys.argv[1:7]
-pairs = sys.argv[7:]
+    # Write via a temp file then rename: a kill mid-write must not leave
+    # truncated JSON, because recovery is exactly when it would be read.
+    python3 - "$file" "$CFG_PATH" "$CFG_DIR" "$url" "$provider" "$devmode" "$complete" "$@" <<'PY'
+import json, sys, datetime, os
+file, cfgpath, cfgdir, url, provider, devmode, complete = sys.argv[1:8]
+pairs = sys.argv[8:]
 pids, starts = {}, {}
 for p in pairs:
     k, _, v = p.partition('=')
@@ -326,8 +331,12 @@ state = {
     "DevMode": devmode == "true",
     "Pids": pids,
     "Starts": starts,
+    "Complete": complete == "true",
 }
-json.dump(state, open(file, 'w', encoding='utf-8'), indent=2)
+tmp = file + ".tmp"
+with open(tmp, 'w', encoding='utf-8') as f:
+    json.dump(state, f, indent=2)
+os.replace(tmp, file)
 PY
   else
     # jq fallback: build the JSON without a JSON parser on the shell side.
@@ -340,9 +349,10 @@ PY
       if [ -n "$start" ]; then starts_json="$starts_json\"$k\":\"$(printf '%s' "$start" | sed 's/"/\\"/g')\""; else starts_json="$starts_json\"$k\":null"; fi
     done
     pids_json="$pids_json}"; starts_json="$starts_json}"
-    printf '{"Project":"%s","ConfigPath":"%s","Provider":"%s","Url":"%s","DevMode":%s,"Pids":%s,"Starts":%s}\n' \
+    printf '{"Project":"%s","ConfigPath":"%s","Provider":"%s","Url":"%s","DevMode":%s,"Pids":%s,"Starts":%s,"Complete":%s}\n' \
       "$CFG_DIR" "$CFG_PATH" "$provider" "$url" "$([ "$devmode" = true ] && echo true || echo false)" \
-      "$pids_json" "$starts_json" > "$file"
+      "$pids_json" "$starts_json" "$([ "$complete" = true ] && echo true || echo false)" > "$file.tmp"
+    mv -f "$file.tmp" "$file"
   fi
 }
 

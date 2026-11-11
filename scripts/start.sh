@@ -97,8 +97,39 @@ if has_state && [ "$FORCE" != 'true' ]; then
     release_boot_lock
     exit 0
   fi
-  warn "Found a stale session record; cleaning it up"
+  # Do NOT clear yet: the reclaim step below needs the journal to find orphans.
+  warn "Found a stale session record; any orphans will be reclaimed below"
+fi
+
+# --- 0c. Reclaim orphans from a boot that was killed ----------------------
+# A hard kill (terminal closed, kill -9, reboot) cannot run the trap. The journal
+# names what had already started, so tear those down before booting again.
+if has_state; then
+  reclaimed=0
+  for key in tunnel gateway; do
+    op="$(state_get "Pids.$key" 2>/dev/null || true)"
+    os_="$(state_get "Starts.$key" 2>/dev/null || true)"
+    if pid_alive "$op" && proc_matches "$op" "$os_"; then
+      kill_tree_force "$op"
+      warn "reclaimed orphan from an interrupted boot: $key (pid $op)"
+      reclaimed=$((reclaimed + 1))
+    fi
+  done
+  i=0
+  while [ "$i" -lt "$SVC_COUNT" ]; do
+    n="$(svc_var "$i" NAME)"
+    op="$(state_get "Pids.$n" 2>/dev/null || true)"
+    os_="$(state_get "Starts.$n" 2>/dev/null || true)"
+    if pid_alive "$op" && proc_matches "$op" "$os_"; then
+      kill_tree_force "$op"
+      warn "reclaimed orphan from an interrupted boot: $n (pid $op)"
+      reclaimed=$((reclaimed + 1))
+    fi
+    i=$((i + 1))
+  done
+  [ "$reclaimed" -gt 0 ] && ok "cleaned up $reclaimed orphaned process(es) from a killed boot"
   clear_state
+  [ "$reclaimed" -gt 0 ] && sleep 1
 fi
 
 # --- 1. Tools --------------------------------------------------------------
@@ -187,6 +218,9 @@ EOF
   pid="${fingerprint%%|*}"
   PIDS+=("$name=$fingerprint")
   STARTED+=("$pid|$name")
+  # Journal immediately: if this script is killed from here on, the service is
+  # already recorded and stop.sh can find it.
+  SESSION_COMPLETE=false save_state '' "$PROVIDER" "$DEVMODE" ${PIDS[@]+"${PIDS[@]}"}
   ok "Started (pid $pid)"
 
   if ! wait_health "$(svc_var "$i" HEALTHURL)" 150 "'$name'"; then
@@ -221,6 +255,7 @@ gw_fp="$(start_logged gateway "$CFG_DIR" "$LOGDIR" "$CADDY" run --config "$CADDY
 gw_pid="${gw_fp%%|*}"
 PIDS+=("gateway=$gw_fp")
 STARTED+=("$gw_pid|gateway")
+SESSION_COMPLETE=false save_state '' "$PROVIDER" "$DEVMODE" ${PIDS[@]+"${PIDS[@]}"}
 ok "Started (pid $gw_pid)"
 
 if ! wait_gateway "http://127.0.0.1:$GW_PORT/" 30; then
@@ -267,6 +302,7 @@ else
   TUNNEL_PID="$tun_pid"
   PIDS+=("tunnel=$tun_fp")
   STARTED+=("$tun_pid|tunnel")
+  SESSION_COMPLETE=false save_state '' "$PROVIDER" "$DEVMODE" ${PIDS[@]+"${PIDS[@]}"}
 
   deadline=$(( $(date +%s) + 100 ))
   while [ "$(date +%s)" -lt "$deadline" ]; do
@@ -350,7 +386,9 @@ while [ "$i" -lt "$SVC_COUNT" ]; do
 done
 
 # --- 6. Save + report ------------------------------------------------------
-save_state "$PUBLIC_URL" "$PROVIDER" "$DEVMODE" ${PIDS[@]+"${PIDS[@]}"}
+# Final write marks the session complete, so a later boot knows this was a
+# finished demo rather than a partial one to reclaim.
+SESSION_COMPLETE=true save_state "$PUBLIC_URL" "$PROVIDER" "$DEVMODE" ${PIDS[@]+"${PIDS[@]}"}
 # State is on disk and the stack is healthy: the boot is complete, so another
 # boot may now legitimately start (it will see the session and refuse).
 release_boot_lock

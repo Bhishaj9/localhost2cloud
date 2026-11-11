@@ -55,6 +55,11 @@ fi
 step "Closing the public link for $CFG_DIR"
 old_url="$(state_get 'Url' 2>/dev/null || true)"
 [ -n "$old_url" ] && ok "was: $old_url"
+# Complete=false means the boot died before it finished (hard kill, closed
+# terminal, reboot). The journal still names what started, so we can clean up.
+if [ "$(state_get 'Complete' 2>/dev/null || true)" = 'false' ]; then
+  warn "This session was interrupted before the demo finished starting - cleaning up a partial boot."
+fi
 
 stopped=0
 
@@ -115,6 +120,17 @@ if [ "$INCLUDE_REUSED" = 'true' ]; then
 fi
 
 clear_state
+
+# A boot killed with -9 or a closed terminal cannot release its lock, which would
+# block the next boot even with nothing running. Clear it when its owner is gone.
+LOCK_DIR="$(boot_lock_dir)"
+if [ -d "$LOCK_DIR" ]; then
+  owner="$(cat "$LOCK_DIR/pid" 2>/dev/null || echo '')"
+  if [ -z "$owner" ] || ! pid_alive "$owner"; then
+    rm -rf "$LOCK_DIR" 2>/dev/null || true
+    ok "cleared a stale boot lock"
+  fi
+fi
 
 printf '\n'
 printf '%sDemo closed. The public URL no longer resolves to this machine.%s\n' "$C_GREEN" "$C_RESET"

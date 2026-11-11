@@ -244,7 +244,32 @@ function Wait-Gateway {
 function Save-DemoState {
     param($Config, $State)
     $file = Join-Path (Get-StateDir -Config $Config) 'session.json'
-    $State | ConvertTo-Json -Depth 8 | Set-Content -Path $file -Encoding UTF8
+    # Write to a sibling then move, so a kill mid-write cannot leave truncated
+    # JSON that would make the session unreadable exactly when recovery needs it.
+    $tmp = "$file.tmp"
+    $State | ConvertTo-Json -Depth 8 | Set-Content -Path $tmp -Encoding UTF8
+    Move-Item -Path $tmp -Destination $file -Force
+}
+
+function Save-SessionJournal {
+    # Persist what has been started SO FAR, before the boot has finished.
+    # Without this a hard kill (terminal closed, taskkill /F, reboot) leaves no
+    # record at all and the orphaned services can never be found again.
+    # Complete=$false tells Stop-Demo.ps1 this is a partial boot to clean up.
+    param($Config, $Pids, $Starts, [string]$Url = $null, [string]$Provider = $null)
+    $state = [pscustomobject]@{
+        Project   = $Config.Dir
+        ConfigPath= $Config.Path
+        Provider  = $Provider
+        Url       = $Url
+        StartedAt = (Get-Date).ToString('o')
+        DevMode   = $false
+        Pids      = [pscustomobject]$Pids
+        Starts    = [pscustomobject]$Starts
+        Complete  = $false
+        Checks    = @()
+    }
+    Save-DemoState -Config $Config -State $state
 }
 
 function Get-DemoState {

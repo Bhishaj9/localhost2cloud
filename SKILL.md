@@ -94,6 +94,11 @@ Run these from the project root (they auto-discover `demo.config.json` upward).
 Never leave the tunnel running after the demo ends — an anonymous public URL pointed at the
 user's laptop is exactly the thing to forget about.
 
+If a boot was killed (terminal closed, PC slept and restarted, `taskkill /F`), do not hunt for
+processes by hand: start the scripts again. They journal every process as it launches, so the
+next run stops the orphans and clears the stale lock on its own. `stop` does the same without
+booting.
+
 ## Access control
 
 By default the link is bare. Before exposing anything you would not want forwarded, offer

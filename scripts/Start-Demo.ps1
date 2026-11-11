@@ -120,8 +120,37 @@ if ($existing -and -not $Force) {
         Exit-BootLock
         return
     }
-    Write-Warn2 "Found a stale session record; cleaning it up"
+    # Do NOT clear here: section 0c needs the journal to find and reclaim the
+    # orphans. It clears once it has finished.
+    Write-Warn2 "Found a stale session record; any orphans will be reclaimed below"
+}
+
+# --- 0c. Recover orphans from a boot that was killed ----------------------
+# A hard kill (taskkill /F, closed terminal, reboot) cannot run the trap. The
+# journal names the processes it had started, so reclaim them here rather than
+# leaving them to hold ports and confuse the next run. Runs for -Force too: a
+# forced restart still needs the old stack torn down first.
+$leftover = Get-DemoState -Config $config
+if ($leftover -and $leftover.Pids) {
+    $reclaimed = 0
+    foreach ($key in @('tunnel','gateway') + @($config.Data.services | ForEach-Object { $_.name })) {
+        if (-not $leftover.Pids.PSObject.Properties[$key]) { continue }
+        $orphanPid = $leftover.Pids.$key
+        if (-not $orphanPid) { continue }
+        $orphanStart = ''
+        if ($leftover.Starts -and $leftover.Starts.PSObject.Properties[$key]) {
+            $orphanStart = [string]$leftover.Starts.$key
+        }
+        # Same identity check as stop: never signal a recycled PID.
+        if (Test-ProcessMatches -ProcessId ([int]$orphanPid) -RecordedStart $orphanStart) {
+            Stop-ProcessTree -ProcessId $orphanPid
+            Write-Warn2 "reclaimed orphan from an interrupted boot: $key (pid $orphanPid)"
+            $reclaimed++
+        }
+    }
+    if ($reclaimed -gt 0) { Write-Ok "cleaned up $reclaimed orphaned process(es) from a killed boot" }
     Clear-DemoState -Config $config
+    Start-Sleep -Milliseconds 700
 }
 
 # --- 1. Tools --------------------------------------------------------------
@@ -203,6 +232,9 @@ foreach ($svc in $data.services) {
     $pids[$svc.name] = $proc.Pid
     $starts[$svc.name] = Get-ProcessStart -ProcessId $proc.Pid
     $script:StartedByBoot += [pscustomobject]@{ Name = $svc.name; Pid = $proc.Pid }
+    # Journal immediately: if this script is killed from here on, the service is
+    # already recorded and Stop-Demo.ps1 can find it.
+    Save-SessionJournal -Config $config -Pids $pids -Starts $starts -Provider $Provider
     Write-Ok "Started (pid $($proc.Pid))"
 
     if (-not (Wait-Health -Url $svc.healthUrl -TimeoutSeconds 150 -Label "'$($svc.name)'")) {
@@ -238,6 +270,7 @@ $gwProc = Start-LoggedProcess -FilePath $caddy -ArgumentList @('run','--config',
 $pids['gateway'] = $gwProc.Pid
 $starts['gateway'] = Get-ProcessStart -ProcessId $gwProc.Pid
 $script:StartedByBoot += [pscustomobject]@{ Name = 'gateway'; Pid = $gwProc.Pid }
+Save-SessionJournal -Config $config -Pids $pids -Starts $starts -Provider $Provider
 Write-Ok "Started (pid $($gwProc.Pid))"
 
 $gwHealth = "http://127.0.0.1:$($gw.port)/"
@@ -272,6 +305,7 @@ if ($Provider -eq 'none') {
     $pids['tunnel'] = $tunnelPid
     $starts['tunnel'] = Get-ProcessStart -ProcessId $tunnelPid
     $script:StartedByBoot += [pscustomobject]@{ Name = 'tunnel'; Pid = $tunnelPid }
+    Save-SessionJournal -Config $config -Pids $pids -Starts $starts -Provider $Provider
 
     # If a named tunnel supplies a stable hostname, prefer it over whatever the
     # log prints: that is the entire point of configuring one.
@@ -329,6 +363,7 @@ $state = [pscustomobject]@{
     DevMode   = [bool]$DevMode
     Pids      = [pscustomobject]$pids
     Starts    = [pscustomobject]$starts
+    Complete  = $true
     Checks    = $checks
 }
 Save-DemoState -Config $config -State $state

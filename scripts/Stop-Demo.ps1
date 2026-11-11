@@ -51,6 +51,11 @@ if (-not $state) {
 
 Write-Step "Closing the public link for $($config.Dir)"
 if ($state.Url) { Write-Ok "was: $($state.Url)" }
+# Complete=$false means the boot died before it finished (hard kill, closed
+# terminal, reboot). The journal still names what started, so we can clean up.
+if ($state.PSObject.Properties['Complete'] -and $state.Complete -eq $false) {
+    Write-Warn2 "This session was interrupted before the demo finished starting - cleaning up a partial boot."
+}
 
 $order = @('tunnel','gateway')
 foreach ($svc in $config.Data.services) { $order += $svc.name }
@@ -101,6 +106,22 @@ if ($IncludeReused) {
 }
 
 Clear-DemoState -Config $config
+
+# A boot killed with /F or a closed terminal cannot release its lock, which would
+# block the next boot even with nothing running. Clear it whenever its owner is
+# gone (a live boot's lock is left alone).
+try {
+    $lockPath = Get-BootLockPath -ProjectDir $config.Dir
+    if (Test-Path $lockPath) {
+        $raw = (Get-Content $lockPath -Raw -ErrorAction SilentlyContinue)
+        $owner = 0
+        if ($null -ne $raw -and ([string]$raw).Trim() -match '^\d+$') { $owner = [int]([string]$raw).Trim() }
+        if ($owner -le 0 -or -not (Get-Process -Id $owner -ErrorAction SilentlyContinue)) {
+            Remove-Item $lockPath -Force -ErrorAction SilentlyContinue
+            Write-Ok "cleared a stale boot lock"
+        }
+    }
+} catch { }
 
 Write-Host ""
 Write-Host "Demo closed. The public URL no longer resolves to this machine." -ForegroundColor Green
