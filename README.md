@@ -223,6 +223,27 @@ directory works in other agents that implement it — nothing to rewrite. It use
 `${COMMANDCODE_SKILL_DIR}` for its own path, with `${CLAUDE_SKILL_DIR}` accepted as an alias
 by Claude Code and equivalents.
 
+## MCP interface (optional)
+
+For agents that prefer structured tool calls over shelling out, `servers/mcp-server.mjs`
+exposes the same scripts as three MCP tools:
+
+| Tool | Returns |
+|---|---|
+| `localhost2cloud_boot` | `{ ok, url, provider, auth_enabled, services[] }` |
+| `localhost2cloud_status` | `{ running, complete, url, services[], healthy }` |
+| `localhost2cloud_stop` | `{ ok, previous_url, stopped[], still_running[], link_closed }` |
+
+```bash
+cmdc mcp add localhost2cloud -- node <path-to-skill>/servers/mcp-server.mjs
+```
+
+Zero dependencies (Node built-ins only), so there is nothing to install. The scripts stay the
+source of truth — the server shells out to them and reads their session file. Health is probed
+directly against each `healthUrl`, so a `401` from an auth-gated API counts as healthy.
+Protocol conformance is covered by `node tests/mcp-conformance.mjs`. Details and the two
+transport bugs it surfaced: [`servers/README.md`](servers/README.md).
+
 ---
 
 ## Troubleshooting

@@ -140,6 +140,19 @@ processes by hand: start the scripts again. They journal every process as it lau
 next run stops the orphans and clears the stale lock on its own. `stop` does the same without
 booting.
 
+## MCP tools (if the server is registered)
+
+When `servers/mcp-server.mjs` is registered, prefer the tools over shelling out — they return
+structured JSON instead of text you have to parse:
+
+- `localhost2cloud_boot` → `{ ok, url, provider, auth_enabled, login_user, services[] }`
+- `localhost2cloud_status` → `{ running, complete, url, services[], healthy }`
+- `localhost2cloud_stop` → `{ ok, previous_url, stopped[], still_running[], link_closed }`
+
+Health in `services[]` is probed directly against each `healthUrl` (honouring
+`acceptStatus`), so a `401` from an auth-gated backend counts as healthy. Use
+`status` before reporting the link is alive, rather than assuming.
+
 ## Access control
 
 By default the link is bare. Before exposing anything you would not want forwarded, offer
