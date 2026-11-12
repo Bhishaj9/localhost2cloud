@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env node
+#!/usr/bin/env node
 /**
  * Protocol conformance test for the MCP server: speaks raw MCP over stdio and
  * asserts the handshake, tool listing and error handling. No MCP client lib.

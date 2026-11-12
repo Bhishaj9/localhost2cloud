@@ -20,6 +20,37 @@ PS> .\scripts\Start-Demo.ps1
 Built as an [Agent Skill](https://agentskills.io/specification) for
 [Command Code](https://commandcode.ai), but the scripts work standalone in any shell.
 
+## Status
+
+**Stable on Windows**, verified end to end rather than asserted. A release gate boots a real
+two-service stack, checks the one-origin routing, stops it, and confirms every port, process,
+session file and lock is gone:
+
+```
+RELEASE GATE: PASS   (20/20 checks)
+```
+
+| Area | State |
+|---|---|
+| Windows (PowerShell 5.1+) | **Supported.** Full lifecycle verified on Windows 11 Pro, build 26200 |
+| Linux (bash) | Works; same lifecycle tested on Ubuntu 26.04 |
+| macOS | **Untested.** Same code path as Linux, but never executed — treat as experimental |
+| MCP interface | 16/16 protocol conformance checks pass; full boot/status/stop driven through it |
+| Auth | Verified through a live tunnel: anonymous `401`, correct `200`, wrong password `401` |
+| WebSockets | Verified: real `101 Switching Protocols` through the public URL, echo round-tripped |
+| Raw TCP/UDP, per-user accounts | **Not supported** — see [`docs/limits.md`](docs/limits.md) |
+
+Testing is the only claim worth making, so it ships with the repo:
+
+```bash
+node tests/release-gate.mjs        # full lifecycle: boot, route, status, stop, leak check
+node tests/mcp-conformance.mjs     # MCP protocol: handshake, tools/list, error codes
+```
+
+Both are self-contained — the gate builds its own two-service fixture and removes it after —
+and both need nothing but Node plus the two CLI tools already required.
+
+
 ---
 
 ## The problem it actually solves
