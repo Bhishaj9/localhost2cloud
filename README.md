@@ -36,6 +36,8 @@ RELEASE GATE: PASS   (20/20 checks)
 | Linux (bash) | Works; same lifecycle tested on Ubuntu 26.04 |
 | macOS | **Untested.** Same code path as Linux, but never executed — treat as experimental |
 | MCP interface | 16/16 protocol conformance checks pass; full boot/status/stop driven through it |
+| Process identity | Verified: a recycled PID is reported as **not running**, and the unrelated process is never touched |
+| `stop` honesty | Verified: if anything still holds a port, `stop` names it with the PID and exits non-zero instead of claiming success |
 | Auth | Verified through a live tunnel: anonymous `401`, correct `200`, wrong password `401` |
 | WebSockets | Verified: real `101 Switching Protocols` through the public URL, echo round-tripped |
 | Raw TCP/UDP, per-user accounts | **Not supported** — see [`docs/limits.md`](docs/limits.md) |
@@ -45,6 +47,7 @@ Testing is the only claim worth making, so it ships with the repo:
 ```bash
 node tests/release-gate.mjs        # full lifecycle: boot, route, status, stop, leak check
 node tests/mcp-conformance.mjs     # MCP protocol: handshake, tools/list, error codes
+node tests/identity-test.mjs       # recycled-PID safety and stop honesty
 ```
 
 Both are self-contained — the gate builds its own two-service fixture and removes it after —

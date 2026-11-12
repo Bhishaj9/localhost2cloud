@@ -107,16 +107,32 @@ while [ "$i" -lt "$SVC_COUNT" ]; do
 done
 
 if [ "$INCLUDE_REUSED" = 'true' ]; then
+  # --include-reused promises to stop services that were already running when the
+  # demo booted. Earlier versions only *listed* them, which made the flag lie and
+  # left a stale session unable to clean the stack holding its ports. Only
+  # declared ports are touched - never an unrelated process.
   i=0
   while [ "$i" -lt "$SVC_COUNT" ]; do
-    port="$(svc_var "$i" PORT)"
+    n="$(svc_var "$i" NAME)"; port="$(svc_var "$i" PORT)"
     owner="$(port_owner "$port" || true)"
     if [ -n "$owner" ]; then
-      warn "'$(svc_var "$i" NAME)' still holding port $port: ${owner#*|} (pid ${owner%%|*})"
-      grey "Stop it manually if it should go down - it predates this demo."
+      kill_tree_force "${owner%%|*}"
+      ok "$n stopped (pid ${owner%%|*}) [was reused]"
+      stopped=$((stopped + 1))
     fi
     i=$((i + 1))
   done
+  # The gateway is ours by construction; if the session was stale its recorded
+  # pid may be wrong, so reclaim it by port instead.
+  if [ "$KEEP_GATEWAY" != 'true' ]; then
+    gw_owner="$(port_owner "$GW_PORT" || true)"
+    if [ -n "$gw_owner" ]; then
+      kill_tree_force "${gw_owner%%|*}"
+      ok "gateway stopped (pid ${gw_owner%%|*}) [by port]"
+      stopped=$((stopped + 1))
+    fi
+  fi
+  [ "$stopped" -gt 0 ] && sleep 1
 fi
 
 clear_state
@@ -132,7 +148,43 @@ if [ -d "$LOCK_DIR" ]; then
   fi
 fi
 
+# --- Verify the promise we just made ---------------------------------------
+# The session file can be stale or wrong (a recycled pid, a hand-edited file, a
+# boot killed mid-write). Reporting "closed" while a service still holds its port
+# is the worst failure mode: the user walks away believing the link is dead, and
+# the next boot then refuses to start. So check the ports we declared, and say so.
+leftover=''
+leftover_count=0
+check_port() {
+  local name="$1" port="$2"
+  [ -n "$port" ] || return 0
+  if port_open "$port"; then
+    local owner; owner="$(port_owner "$port" || true)"
+    local who='unknown process'
+    [ -n "$owner" ] && who="$(printf '%s' "${owner#*|}") (pid ${owner%%|*})"
+    leftover="$leftover  $name on port $port - $who
+"
+    leftover_count=$((leftover_count + 1))
+  fi
+}
+i=0
+while [ "$i" -lt "$SVC_COUNT" ]; do
+  check_port "$(svc_var "$i" NAME)" "$(svc_var "$i" PORT)"
+  i=$((i + 1))
+done
+check_port gateway "$GW_PORT"
+
 printf '\n'
-printf '%sDemo closed. The public URL no longer resolves to this machine.%s\n' "$C_GREEN" "$C_RESET"
-[ "$stopped" -eq 0 ] && grey "Nothing was running under this session."
-exit 0
+if [ "$leftover_count" -eq 0 ]; then
+  printf '%sDemo closed. The public URL no longer resolves to this machine.%s\n' "$C_GREEN" "$C_RESET"
+  [ "$stopped" -eq 0 ] && grey "Nothing was running under this session."
+  exit 0
+fi
+
+bad "Demo NOT fully closed - these are still listening:"
+printf '%s' "$leftover" | while IFS= read -r l; do [ -n "$l" ] && warn "$l"; done
+printf '\n'
+grey "    The session record did not name these, so they may not belong to this demo."
+grey "    Stop them with:  kill <pid>"
+grey "    If you are sure, re-run:  ./stop.sh --include-reused"
+exit 1

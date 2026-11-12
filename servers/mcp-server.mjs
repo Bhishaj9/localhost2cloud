@@ -274,21 +274,98 @@ async function probeServices(config) {
   return results;
 }
 
-function sessionAlive(session) {
-  if (!session?.Pids) return false;
-  const pids = Object.entries(session.Pids).filter(([, v]) => v);
-  if (pids.length === 0) return false;
-  // We cannot fingerprint from here cheaply; a positive pid that the OS still
-  // knows about is enough for a status report. The scripts do the strict check.
-  for (const [, pid] of pids) {
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch {
-      // dead
+// ---------------------------------------------------------------------------
+// Process identity
+// ---------------------------------------------------------------------------
+// A bare `kill(pid, 0)` only proves *some* process holds that PID. Windows and
+// Linux both recycle PIDs aggressively, so a stale session could report
+// "running" for something completely unrelated - and the scripts deliberately
+// guard against that. We must use the same check, or the two interfaces
+// disagree about reality.
+//
+// The scripts record Starts[name] as:
+//   Windows: PowerShell  $p.StartTime.ToUniversalTime().ToString('o')
+//   POSIX:   ps -p PID -o lstart=
+// We query with the SAME method so the strings are directly comparable.
+
+/** Return Map<pid, startString> for the pids that exist. One child process. */
+async function readStartTimes(pids) {
+  const out = new Map();
+  const list = pids.filter((p) => Number.isInteger(p) && p > 0);
+  if (list.length === 0) return out;
+
+  if (isWindows) {
+    const script =
+      `$ids = @(${list.join(',')}); ` +
+      `foreach ($i in $ids) { ` +
+      `  try { $p = Get-Process -Id $i -ErrorAction Stop; ` +
+      `        Write-Output ("{0}|{1}" -f $i, $p.StartTime.ToUniversalTime().ToString('o')) } ` +
+      `  catch { Write-Output ("{0}|" -f $i) } }`;
+    const { output } = await runProcess('powershell', ['-NoProfile', '-NonInteractive', '-Command', script]);
+    for (const line of output.split(/\r?\n/)) {
+      const m = line.match(/^\s*(\d+)\|(.*)$/);
+      if (m && m[2].trim()) out.set(Number(m[1]), m[2].trim());
+    }
+  } else {
+    const { output } = await runProcess('ps', ['-p', list.join(','), '-o', 'pid=,lstart=']);
+    for (const line of output.split(/\r?\n/)) {
+      const m = line.match(/^\s*(\d+)\s+(.+?)\s*$/);
+      if (m) out.set(Number(m[1]), m[2].trim());
     }
   }
-  return false;
+  return out;
+}
+
+/** Minimal argv runner for the identity probe (not the demo scripts). */
+function runProcess(cmd, args) {
+  return new Promise((resolve) => {
+    let out = '';
+    try {
+      const child = spawn(cmd, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      const timer = setTimeout(() => {
+        try { child.kill('SIGKILL'); } catch {}
+        resolve({ output: out });
+      }, 15000);
+      child.stdout.on('data', (d) => (out += d.toString()));
+      child.stderr.on('data', (d) => (out += d.toString()));
+      child.on('error', () => { clearTimeout(timer); resolve({ output: out }); });
+      child.on('exit', () => { clearTimeout(timer); resolve({ output: out }); });
+    } catch {
+      resolve({ output: '' });
+    }
+  });
+}
+
+/**
+ * Is this session still ours?
+ * Returns { running, verified } where `verified` is false when every recorded
+ * pid lacks a fingerprint (a session written by an older version), in which
+ * case we degrade to an existence check and say so instead of pretending.
+ */
+async function sessionAlive(session) {
+  if (!session?.Pids) return { running: false, verified: true };
+  const entries = Object.entries(session.Pids).filter(([, pid]) => Number.isInteger(pid) && pid > 0);
+  if (entries.length === 0) return { running: false, verified: true };
+
+  const starts = await readStartTimes(entries.map(([, pid]) => pid));
+  let sawFingerprint = false;
+
+  for (const [name, pid] of entries) {
+    const recorded = session.Starts?.[name];
+    if (!recorded) continue; // no fingerprint: not conclusive
+    sawFingerprint = true;
+    const actual = starts.get(pid);
+    if (!actual) continue; // process gone
+    if (actual === String(recorded).trim()) return { running: true, verified: true };
+    // Same PID, different process: the demo is gone.
+    log(`pid ${pid} (${name}) was reused by an unrelated process - not counting it as running`);
+  }
+
+  if (!sawFingerprint) {
+    // Legacy session: fall back, but be explicit that identity was not proven.
+    return { running: starts.size > 0, verified: false };
+  }
+  return { running: false, verified: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -367,6 +444,7 @@ async function handleStatus(args) {
   const { code, output } = await runScript('Status-Demo', isWindows ? cli : bashArgs, cwd);
   const state = readSession(cwd);
   const services = await probeServices(state.config);
+  const liveness = await sessionAlive(state.session);
 
   return {
     content: [
@@ -374,7 +452,8 @@ async function handleStatus(args) {
         type: 'text',
         text: JSON.stringify(
           {
-            running: sessionAlive(state.session),
+            running: liveness.running,
+            identity_verified: liveness.verified,
             complete: state.session?.Complete ?? null,
             url: state.session?.Url ?? null,
             provider: state.session?.Provider ?? null,

@@ -95,14 +95,27 @@ foreach ($name in $order) {
 }
 
 if ($IncludeReused) {
-    # With -IncludeReused the reused services are also fair game.
+    # -IncludeReused promises to stop services that were already running when the
+    # demo booted. Earlier versions only *listed* them, which made the flag lie
+    # and left a stale session unable to clean the stack it could see holding the
+    # ports. Only declared ports are touched - never an unrelated process.
     foreach ($svc in $config.Data.services) {
         $owner = Get-PortOwner -Port $svc.port
         if ($owner) {
-            Write-Host "    '$($svc.name)' still holding port $($svc.port): $($owner.Name) (pid $($owner.Pid))" -ForegroundColor Yellow
-            Write-Host "      Stop it manually if it should go down - it predates this demo." -ForegroundColor DarkGray
+            Stop-ProcessTree -ProcessId ([int]$owner.Pid)
+            Write-Ok "$($svc.name) stopped (pid $($owner.Pid)) [was reused]"
+            $stopped++
         }
     }
+    # The gateway is ours by construction, but if the session was stale its pid
+    # may be wrong - reclaim it by port rather than by recorded pid.
+    $gwOwner = Get-PortOwner -Port ([int]$config.Data.gateway.port)
+    if ($gwOwner -and -not $KeepGateway) {
+        Stop-ProcessTree -ProcessId ([int]$gwOwner.Pid)
+        Write-Ok "gateway stopped (pid $($gwOwner.Pid)) [by port]"
+        $stopped++
+    }
+    if ($stopped -gt 0) { Start-Sleep -Milliseconds 800 }
 }
 
 Clear-DemoState -Config $config
@@ -123,8 +136,51 @@ try {
     }
 } catch { }
 
-Write-Host ""
-Write-Host "Demo closed. The public URL no longer resolves to this machine." -ForegroundColor Green
-if ($stopped -eq 0) {
-    Write-Host "Nothing was running under this session." -ForegroundColor DarkGray
+# --- Verify the promise we just made ---------------------------------------
+# The session file can be stale or wrong (a recycled PID, a hand-edited file, a
+# boot killed mid-write). Reporting "closed" while a service still holds its port
+# is the worst failure mode: the user walks away believing the link is dead, and
+# the next boot then refuses to start. So check the ports we declared, and say so
+# plainly when something is still there.
+$leftover = @()
+foreach ($svc in $config.Data.services) {
+    if (-not $svc.port) { continue }
+    if (Test-PortOpen -Port ([int]$svc.port)) {
+        $owner = Get-PortOwner -Port ([int]$svc.port)
+        $leftover += [pscustomobject]@{
+            Name = $svc.name
+            Port = $svc.port
+            Owner = if ($owner) { "$($owner.Name) (pid $($owner.Pid))" } else { 'unknown process' }
+            Pid = if ($owner) { $owner.Pid } else { $null }
+        }
+    }
 }
+if (Test-PortOpen -Port ([int]$config.Data.gateway.port)) {
+    $owner = Get-PortOwner -Port ([int]$config.Data.gateway.port)
+    $leftover += [pscustomobject]@{
+        Name = 'gateway'
+        Port = $config.Data.gateway.port
+        Owner = if ($owner) { "$($owner.Name) (pid $($owner.Pid))" } else { 'unknown process' }
+        Pid = if ($owner) { $owner.Pid } else { $null }
+    }
+}
+
+Write-Host ""
+if ($leftover.Count -eq 0) {
+    Write-Host "Demo closed. The public URL no longer resolves to this machine." -ForegroundColor Green
+    if ($stopped -eq 0) {
+        Write-Host "Nothing was running under this session." -ForegroundColor DarkGray
+    }
+    exit 0
+}
+
+# Something survived. Say exactly what, and offer the one safe action.
+Write-Bad "Demo NOT fully closed - these are still listening:"
+foreach ($l in $leftover) {
+    Write-Host "    $($l.Name) on port $($l.Port) - $($l.Owner)" -ForegroundColor Yellow
+}
+Write-Host ""
+Write-Host "    The session record did not name these, so they may not belong to this demo." -ForegroundColor DarkGray
+Write-Host "    Stop them with:  Stop-Process -Id <pid> -Force" -ForegroundColor DarkGray
+Write-Host "    If you are sure, re-run:  .\Stop-Demo.ps1 -IncludeReused" -ForegroundColor DarkGray
+exit 1
