@@ -1,12 +1,22 @@
 ---
 name: localhost2cloud
 description: Boot a local app on this laptop and hand the user ONE public link their team can open like a cloud-hosted app, then tear it down on request. Use when the user says "boot it up", "start the demo", "give me a shareable link", "host this for my team", "make my laptop an EC2", "demo remotely", "stop the demo", or asks to expose a localhost app to remote viewers.
+when_to_use: |
+  Also reach for this when the user says any of: "my team can't reach my laptop",
+  "my colleagues need to see this running", "how do I show this without screen
+  sharing", "port forward for a demo", "share my dev server", "I need a public URL
+  for 20 minutes", "host it from home", "expose this to a client", "tunnel my
+  localhost", "they need to click through it themselves", "give them a link to
+  test", "demo without deploying", "stop sharing", "kill the demo link", or asks
+  whether a localhost app can be reviewed by someone else without a deploy.
+  Not for permanent production hosting, and not for exposing databases or raw
+  TCP/UDP services.
 argument-hint: "[boot|stop|status|setup] [path-to-demo.config.json]"
 license: MIT
 compatibility: Windows (PowerShell 5.1+) is the supported platform. Linux works via bash and is tested; macOS is untested. Needs cloudflared (tunnel) and caddy (single-origin gateway); Install-Tools.ps1 / install-tools.sh provision both.
 metadata:
   author: command-code
-  version: "1.0.0"
+  version: "1.1.0"
 ---
 
 # localhost2cloud
@@ -18,6 +28,21 @@ screen share, nothing deployed to a cloud.
 All the mechanics live in `scripts/`. Your job is to know *which* script to run, and to
 catch the app-level things that silently break through a tunnel before the user finds out
 in front of their team.
+
+## The path to these scripts
+
+Every command below is written relative to this skill's own directory, which Command Code
+substitutes for you:
+
+> **`${COMMANDCODE_SKILL_DIR}`** — absolute path to this skill directory.
+
+Use that literal variable in commands; never guess or hardcode an install path. It is
+correct whether the skill was cloned by hand, installed with `cmdc skills add`, or lives in
+a non-default location. `${CLAUDE_SKILL_DIR}` is an accepted alias.
+
+The project you are booting is a different directory — that is `${COMMANDCODE_PROJECT_DIR}`,
+or simply wherever the user's `demo.config.json` lives. Run the scripts *from the project
+root*, because they discover the config by walking upward.
 
 ## The one rule that makes this work
 
@@ -42,37 +67,53 @@ from the config. Never hand-write the Caddyfile; never add a second tunnel.
 
 ## Commands
 
-Two equivalent implementations ship in `scripts/`:
-**`*.ps1`** (Windows PowerShell) and **`*.sh`** (macOS/Linux bash). Pick by platform; the
-behaviour and config format are identical, and the state file is interchangeable.
+Two equivalent implementations ship in `scripts/`: **`*.ps1`** (Windows PowerShell) and
+**`*.sh`** (Linux/macOS bash — macOS untested). Behaviour and config format are identical,
+and the state file is interchangeable.
 
-Run these from the project root (they auto-discover `demo.config.json` upward).
+Run these **from the project root** (the scripts auto-discover `demo.config.json` by walking
+upward). `${COMMANDCODE_SKILL_DIR}` is this skill's directory.
 
-**macOS / Linux**
-
-| Intent | Command |
-|---|---|
-| Boot and print the link | `<skill>/scripts/start.sh` |
-| Boot, local only (no public URL) | `... start.sh --provider none` |
-| Rebuild/restart cleanly | `... start.sh --force` |
-| Boot with hot reload | `... start.sh --dev` |
-| Re-print / health-check the link | `... status.sh` |
-| Close the link | `... stop.sh` |
-| First-time tool install | `... install-tools.sh` |
-
-**Windows**
+**Windows** (supported platform)
 
 | Intent | Command |
 |---|---|
-| Boot and print the link | `powershell -File <skill>\scripts\Start-Demo.ps1` |
+| Boot and print the link | `powershell -NoProfile -File "${COMMANDCODE_SKILL_DIR}\scripts\Start-Demo.ps1"` |
 | Boot, local only (no public URL) | `... Start-Demo.ps1 -Provider none` |
 | Rebuild/restart cleanly | `... Start-Demo.ps1 -Force` |
 | Boot with hot reload | `... Start-Demo.ps1 -DevMode` |
 | Re-print / health-check the link | `... Status-Demo.ps1` |
 | Close the link | `... Stop-Demo.ps1` |
+| Require a login on the link | `... gen-password.sh` is bash-only; on Windows set `auth.password` in the config |
 | First-time tool install | `... Install-Tools.ps1` |
 
-`<skill>` is this skill's directory, e.g. `~/.commandcode/skills/localhost2cloud`.
+**Linux / macOS**
+
+| Intent | Command |
+|---|---|
+| Boot and print the link | `"${COMMANDCODE_SKILL_DIR}/scripts/start.sh"` |
+| Boot, local only (no public URL) | `... start.sh --provider none` |
+| Rebuild/restart cleanly | `... start.sh --force` |
+| Boot with hot reload | `... start.sh --dev` |
+| Re-print / health-check the link | `... status.sh` |
+| Close the link | `... stop.sh` |
+| Generate a login password + hash | `... gen-password.sh -c demo.config.json` |
+| First-time tool install | `... install-tools.sh` |
+
+### Installing or updating this skill
+
+```bash
+cmdc skills add Bhishaj9/localhost2cloud --global     # install / update
+cmdc skills remove localhost2cloud --global --yes     # uninstall
+```
+
+On Windows use **`cmdc`**, not `cmd` — `cmd` is `cmd.exe` and opens a shell instead. The
+`--global` install writes to `~/.commandcode/skills/localhost2cloud`, the same path a manual
+`git clone` uses, so an install **overwrites local edits** there. Edit in your clone and
+copy across, or work in the clone directly.
+
+Skills are indexed at agent startup: a freshly installed or edited skill becomes invocable in
+the *next* session. The scripts themselves always run immediately.
 
 ## Workflow: "boot it up"
 

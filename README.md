@@ -5,7 +5,7 @@ gives you a single shareable `https://` link your team can open in a browser —
 screen share, no account with a tunnel provider.
 
 ```
-$ ./scripts/start.sh
+PS> .\scripts\Start-Demo.ps1
 
 ======================================================================
   SHARE THIS LINK
@@ -14,7 +14,7 @@ $ ./scripts/start.sh
 
 ======================================================================
   All checks passed from the public internet.
-  When they are done:  ./stop.sh
+  When they are done:  .\Stop-Demo.ps1
 ```
 
 Built as an [Agent Skill](https://agentskills.io/specification) for
@@ -58,15 +58,18 @@ for Windows. Same config, same behaviour, interchangeable state file.
 
 **1. Install the two tools** (cloudflared + caddy, one time):
 
-```bash
-./scripts/install-tools.sh          # macOS / Linux
-```
 ```powershell
-.\scripts\Install-Tools.ps1         # Windows
+.\scripts\Install-Tools.ps1         # Windows (supported platform)
+```
+```bash
+./scripts/install-tools.sh          # Linux (macOS untested)
 ```
 
 **2. Describe your stack.** Copy the annotated template to your project root:
 
+```powershell
+Copy-Item .\assets\demo.config.example.json D:\YourProject\demo.config.json
+```
 ```bash
 cp assets/demo.config.example.json /path/to/YourProject/demo.config.json
 ```
@@ -91,15 +94,15 @@ cp assets/demo.config.example.json /path/to/YourProject/demo.config.json
 
 **3. Boot it:**
 
-```bash
-cd /path/to/YourProject
-/path/to/localhost2cloud/scripts/start.sh        # or Start-Demo.ps1 on Windows
+```powershell
+cd D:\YourProject
+D:\path\to\localhost2cloud\scripts\Start-Demo.ps1
 ```
 
 Share the link. When feedback is done:
 
-```bash
-/path/to/localhost2cloud/scripts/stop.sh         # or Stop-Demo.ps1
+```powershell
+D:\path\to\localhost2cloud\scripts\Stop-Demo.ps1
 ```
 
 Scripts find `demo.config.json` by walking up from the current directory, so they work in any
@@ -109,24 +112,25 @@ project without flags.
 
 ## Commands
 
-macOS / Linux:
+Windows:
 
 | Command | What it does |
 |---|---|
-| `scripts/start.sh` | Boot the stack, open a tunnel, print the link, verify it publicly |
-| `scripts/status.sh` | Check processes, ports, routing and the public URL; re-print the link |
-| `scripts/stop.sh` | Close the link and stop what this skill started |
-| `scripts/install-tools.sh` | Install `cloudflared` and `caddy` (brew/apt/dnf, else release binary) |
+| `Start-Demo.ps1` | Boot the stack, open a tunnel, print the link, verify it publicly |
+| `Status-Demo.ps1` | Check processes, ports, routing and the public URL; re-print the link |
+| `Stop-Demo.ps1` | Close the link and stop what this skill started |
+| `Install-Tools.ps1` | Install `cloudflared` and `caddy` (winget, else direct download) |
 
-Windows: `Start-Demo.ps1`, `Status-Demo.ps1`, `Stop-Demo.ps1`, `Install-Tools.ps1`.
+Linux (macOS untested): `start.sh`, `status.sh`, `stop.sh`, `install-tools.sh`, `gen-password.sh` —
+same behaviour, same config, interchangeable state file.
 
-Useful flags:
+Useful flags (bash spelling first, PowerShell equivalent in brackets):
 
 ```bash
-./start.sh --provider none    # local only, no public exposure  (-Provider none on Windows)
-./start.sh --dev              # use each service's devMode args (-DevMode)
-./start.sh --force            # tear down a stale session and restart (-Force)
-./stop.sh  --include-reused   # also stop services that were already running
+./start.sh --provider none    # local only, no public exposure   [-Provider none]
+./start.sh --dev              # use each service's devMode args  [-DevMode]
+./start.sh --force            # tear down a stale session        [-Force]
+./stop.sh  --include-reused   # also stop services already running [-IncludeReused]
 ```
 
 Also supports `--provider ngrok` — see [`references/providers.md`](references/providers.md)
@@ -191,20 +195,33 @@ block, the anonymous quick-tunnel path is used unchanged.
 
 ## Using it as an Agent Skill
 
-The repo root *is* a skill (`SKILL.md` + `scripts/` + `assets/` + `references/`). To let an
-agent drive it, install it where your tool looks for skills:
+The repo root *is* a skill (`SKILL.md` + `scripts/` + `assets/` + `references/`). Install it
+with Command Code's native installer:
 
 ```bash
-git clone https://github.com/Bhishaj9/localhost2cloud.git ~/.commandcode/skills/localhost2cloud
+cmdc skills add Bhishaj9/localhost2cloud --global
 ```
+
+Verified: this installs to `~/.commandcode/skills/localhost2cloud` and registers immediately
+in `cmdc skills list`. A manual clone to the same path works identically, which also means an
+install **overwrites local edits** in that directory — keep edits in your clone.
+
+> On Windows run **`cmdc`**, not `cmd`: `cmd` is `cmd.exe` and just opens a shell.
 
 Then just say "boot it up" / "give me a demo link" / "stop the demo". The `SKILL.md` carries
 the agent-facing playbook, including the preflight checks that catch the app-level problems a
 tunnel exposes (client code hardcoding `127.0.0.1`, framework dev-server origin guards,
 secrets that become public the moment the link is shared).
 
-Skills are indexed at agent startup, so a freshly cloned skill becomes invocable on the next
-session. Until then, the scripts run fine by hand.
+Skills are indexed at agent startup, so a freshly cloned or updated skill becomes invocable on
+the next session. The scripts themselves run immediately.
+
+### Other agents
+
+`SKILL.md` follows the open [Agent Skills standard](https://agentskills.io), so the same
+directory works in other agents that implement it — nothing to rewrite. It uses
+`${COMMANDCODE_SKILL_DIR}` for its own path, with `${CLAUDE_SKILL_DIR}` accepted as an alias
+by Claude Code and equivalents.
 
 ---
 
