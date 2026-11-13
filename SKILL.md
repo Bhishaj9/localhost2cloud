@@ -15,8 +15,8 @@ argument-hint: "[boot|stop|status|setup] [path-to-demo.config.json]"
 license: MIT
 compatibility: Windows (PowerShell 5.1+) is the supported platform. Linux works via bash and is tested; macOS is untested. Needs cloudflared (tunnel) and caddy (single-origin gateway); Install-Tools.ps1 / install-tools.sh provision both.
 metadata:
-  author: command-code
-  version: "1.1.0"
+  author: Gaurav Vashistha <gaurav.vashistha09@gmail.com>
+  version: "1.2.0"
 ---
 
 # localhost2cloud
@@ -145,13 +145,21 @@ booting.
 When `servers/mcp-server.mjs` is registered, prefer the tools over shelling out — they return
 structured JSON instead of text you have to parse:
 
-- `localhost2cloud_boot` → `{ ok, url, provider, auth_enabled, login_user, services[] }`
-- `localhost2cloud_status` → `{ running, complete, url, services[], healthy }`
+- `localhost2cloud_boot` → `{ ok, url, pending, provider, auth_enabled, services[], checks[] }`
+- `localhost2cloud_status` → `{ running, gateway_alive, tunnel_alive, link_verified, url, healthy, ... }`
 - `localhost2cloud_stop` → `{ ok, previous_url, stopped[], still_running[], link_closed }`
 
-Health in `services[]` is probed directly against each `healthUrl` (honouring
-`acceptStatus`), so a `401` from an auth-gated backend counts as healthy. Use
-`status` before reporting the link is alive, rather than assuming.
+`running` is true only when the gateway and (when one is expected) the tunnel are alive.
+`link_verified` is a real request to the URL; `healthy` comes from the services' own health
+checks, so a `401` from an auth-gated backend counts as healthy. Use `status` before reporting
+the link is alive, rather than assuming.
+
+Boot can take a minute or two. The tool streams `notifications/progress` when the client
+supplies a progress token, and accepts `timeout_s`. If it returns `pending: true`, the boot may
+still finish — call `status` instead of booting again.
+
+For CI or another agent, every script also accepts `--json` / `-Json`: one JSON envelope on
+stdout, human output on stderr. See `servers/README.md` for the shape.
 
 ## Access control
 
